@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -12,6 +12,11 @@
     <PackageReference Include="Solana.Rpc" Version="8.7.0" />
     <PackageReference Include="Solana.Wallet" Version="8.7.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BlockchainService.Domain\BlockchainService.Domain.csproj" />
+    <ProjectReference Include="..\BlockchainService.Inrastructure\BlockchainService.Inrastructure.csproj" />
   </ItemGroup>
 
 </Project>
