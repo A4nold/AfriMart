@@ -1,10 +1,10 @@
 ﻿namespace BlockchainService.Api.Models.Requests;
 
-public record PlaceBetRequest(
-    string MarketPubkey,
-    byte OutcomeIndex,
-    ulong Amount,
-    string UserPublicKey,
-    string UserTokenAccount
-);
+public class PlaceBetRequest 
+{
+    public string BettorTokenAccount { get; set; } = default!;
+    public string VaultTokenAccount { get; set; } = default!;
+    public ulong StakeAmount { get; set; }
+    public byte OutcomeIndex { get; set; }
+}
 

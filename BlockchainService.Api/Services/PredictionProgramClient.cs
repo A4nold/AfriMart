@@ -11,7 +11,9 @@ using Solnet.Rpc;
 using Solnet.Rpc.Builders;
 using Solnet.Rpc.Models;
 using Solnet.Wallet;
+using Solnet.Wallet.Utilities;
 using Solnet.KeyStore;
+using Solnet.Programs.Utilities;
 
 namespace BlockchainService.Api.Services
 {
@@ -27,6 +29,15 @@ namespace BlockchainService.Api.Services
     {
         public string MarketAction { get; set; } = default!;
         public string MarketPubkey { get; set; } = default!;
+        public string TransactionSignature { get; set; } = default!;
+    }
+
+    public class PlaceBetResult
+    {
+        public string MarketPubkey { get; set; } = default!;
+        public string BettorTokenAccount { get; set; } = default!;
+        public ulong StakeAmount { get; set; }
+        public byte OutcomeIndex { get; set; }
         public string TransactionSignature { get; set; } = default!;
     }
 
@@ -218,6 +229,100 @@ namespace BlockchainService.Api.Services
             };
         }
 
+        public async Task<PlaceBetResult> PlaceBetAsync(
+            string marketPubkey,
+            string bettorTokenAccount,
+            string vaultTokenAccount,
+            ulong stakeAmount,
+            byte outcomeIndex)
+        {
+            var marketPk = new PublicKey(marketPubkey);
+            var bettorTokenpk = new PublicKey(bettorTokenAccount);
+            var vaultTokenPk = new PublicKey(vaultTokenAccount);
+
+            //derive position PDA
+            //seeds = [b"position", market.key().as_ref(), user.key().as_ref()]
+            byte[][] seeds =
+            {
+                Encoding.UTF8.GetBytes("position"),
+                marketPk.KeyBytes,
+                _authority.PublicKey.KeyBytes //user = authority for now
+            };
+
+            if (!PublicKey.TryFindProgramAddress(seeds, _programId, out var positionPk, out var bumpSeed))
+                throw new Exception($"Failed to derive position PDA.");
+
+            //build ix data: discriminator + stake (u64) + outcome_index (u8)
+            var ixData = BuildPlaceBetInstructionDate(stakeAmount, outcomeIndex);
+
+            //fresh blockhash
+            var blockhashResult = await _rpc.GetLatestBlockHashAsync();
+            if (!blockhashResult.WasSuccessful || blockhashResult.Result == null)
+                throw new Exception($"Failed to get latest blockhash: {blockhashResult.Reason}");
+
+            var recentBlockhash = blockhashResult.Result.Value.Blockhash;
+
+            //accounts: 
+            var accounts = new List<AccountMeta>
+            {
+                //0. market
+                AccountMeta.Writable(marketPk, false),
+                //1. position PDA
+                AccountMeta.Writable(positionPk, false),
+                //2. bettor (signer, mut)
+                AccountMeta.Writable(_authority.PublicKey, true),
+                //3. bettor_collateral_ata (mut)
+                AccountMeta.Writable(bettorTokenpk, false),
+                //4. vault (mut)
+                AccountMeta.Writable(vaultTokenPk, false),
+                //5. token_program
+                AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false),
+                //6. system_program
+                AccountMeta.ReadOnly(SystemProgram.ProgramIdKey, false),
+            };
+
+            var ix = new TransactionInstruction
+            {
+                ProgramId = _programId,
+                Keys = accounts,
+                Data = ixData
+            };
+
+            var tx = new TransactionBuilder()
+                .SetRecentBlockHash(recentBlockhash)
+                .SetFeePayer(_authority)
+                .AddInstruction(ix)
+                .Build(new[] { _authority });
+
+            // Optional: simulate for logs
+            var simResult = await _rpc.SimulateTransactionAsync(tx);
+            if (!simResult.WasSuccessful || simResult.Result?.Value == null)
+                throw new Exception("Simulation failed: " + simResult.Reason);
+
+            if (simResult.Result.Value.Logs != null)
+            {
+                Console.WriteLine("=== PlaceBet simulation logs ===");
+                foreach (var log in simResult.Result.Value.Logs)
+                    Console.WriteLine(log);
+                Console.WriteLine("=== End logs ===");
+            }
+
+            var txSigResult = await _rpc.SendTransactionAsync(tx);
+            if (!txSigResult.WasSuccessful)
+                throw new Exception("Failed to send place_bet tx: " + txSigResult.Reason);
+
+            Console.WriteLine($"[PlaceBet] Tx signature: {txSigResult.Result}");
+
+            return new PlaceBetResult
+            {
+                MarketPubkey = marketPk.Key,
+                BettorTokenAccount = bettorTokenpk.Key,
+                StakeAmount = stakeAmount,
+                OutcomeIndex = outcomeIndex,
+                TransactionSignature = txSigResult.Result
+            };
+        }
+
         private static byte[] BuildCreateMarketInstructionData(
             string question,
             string[] outcomes,
@@ -274,6 +379,26 @@ namespace BlockchainService.Api.Services
 
             // args: u8 outcome_index
             bw.Write(outcomeIndex);
+
+            bw.Flush();
+            return ms.ToArray();
+        }
+
+        private static byte[] BuildPlaceBetInstructionDate(ulong stakeAmount, byte outcomeIndex)
+        {
+            using var ms = new MemoryStream();
+            using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+
+            // 1) discriminator: "global:place_bet"
+            var discriminator = GetAnchorDiscriminator("global", "place_bet");
+            bw.Write(discriminator);
+
+            //Important must match Rust arg order:
+            // 2) outcome_index: u8 (first arg)
+            bw.Write(outcomeIndex);
+
+            //3) amount: u64 (second arg)
+            bw.Write(stakeAmount);
 
             bw.Flush();
             return ms.ToArray();

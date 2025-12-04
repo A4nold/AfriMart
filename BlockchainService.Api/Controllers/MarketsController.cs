@@ -47,4 +47,26 @@ public class MarketsController : ControllerBase
 
         return Ok(response);
     }
+
+    [HttpPost("{marketPubkey}/byte")]
+    public async Task<ActionResult<PlaceBetResponse>> PlaceBet(
+        string marketPubkey,
+        [FromBody] PlaceBetRequest request)
+    {
+        var result = await _client.PlaceBetAsync(
+            marketPubkey,
+            request.BettorTokenAccount,
+            request.VaultTokenAccount,
+            request.StakeAmount,
+            request.OutcomeIndex);
+
+        var response = new PlaceBetResponse(
+            result.MarketPubkey,
+            result.BettorTokenAccount,
+            result.StakeAmount,
+            result.OutcomeIndex,
+            result.TransactionSignature );
+
+        return Ok(response);
+    }
 }
