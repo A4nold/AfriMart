@@ -1,46 +1,24 @@
-﻿using System;
+﻿using BlockchainService.Inrastructure.Helpers;
+using Microsoft.Extensions.Options;
+using Solnet.KeyStore;
+using Solnet.Programs;
+using Solnet.Programs.Utilities;
+using Solnet.Rpc;
+using Solnet.Rpc.Builders;
+using Solnet.Rpc.Models;
+using Solnet.Rpc.Types;
+using Solnet.Wallet;
+using Solnet.Wallet.Utilities;
+using System;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Options;
-using Solnet.Programs;
-using Solnet.Rpc;
-using Solnet.Rpc.Builders;
-using Solnet.Rpc.Models;
-using Solnet.Wallet;
-using Solnet.Wallet.Utilities;
-using Solnet.KeyStore;
-using Solnet.Programs.Utilities;
 
 namespace BlockchainService.Api.Services
 {
-    public class SolanaOptions
-    {
-        public string RpcUrl { get; set; } = default!;
-        public string ProgramId { get; set; } = default!;
-        // We won’t use AuthorityKeypairPath for now
-        public string AuthorityKeypairPath { get; set; } = default!;
-    }
-
-    public class MarketResult
-    {
-        public string MarketAction { get; set; } = default!;
-        public string MarketPubkey { get; set; } = default!;
-        public string TransactionSignature { get; set; } = default!;
-    }
-
-    public class PlaceBetResult
-    {
-        public string MarketPubkey { get; set; } = default!;
-        public string BettorTokenAccount { get; set; } = default!;
-        public ulong StakeAmount { get; set; }
-        public byte OutcomeIndex { get; set; }
-        public string TransactionSignature { get; set; } = default!;
-    }
-
     public class PredictionProgramClient
     {
         private readonly IRpcClient _rpc;
@@ -321,6 +299,110 @@ namespace BlockchainService.Api.Services
                 OutcomeIndex = outcomeIndex,
                 TransactionSignature = txSigResult.Result
             };
+        }
+
+        /// <summary>
+        /// Claims winnings for the current (MVP) user = authority.
+        /// This matches the Anchor ClaimWinnings accounts exactly:
+        /// market, position PDA, user, user_collateral_ata, vault, authority, token_program.
+        /// </summary>
+        public async Task<string> ClaimWinningsAsync(
+            string marketPubkey,
+            string userCollateralAta,
+            string vaultTokenAccount,
+            CancellationToken ct = default)
+        {
+            var marketPk = new PublicKey(marketPubkey);
+            var userCollateral = new PublicKey(userCollateralAta);
+            var vaultPk = new PublicKey(vaultTokenAccount);
+
+            // In the Rust program, seeds = [b"position", market.key(), user.key()]
+            // For MVP, user == authority.
+            byte[][] seeds =
+            {
+                Encoding.UTF8.GetBytes("position"),
+                marketPk.KeyBytes,
+                _authority.PublicKey.KeyBytes
+            };
+
+            if (!PublicKey.TryFindProgramAddress(seeds, _programId, out var positionPk, out var bumpSeed))
+                throw new Exception($"Failed to derive position PDA.");
+
+            // ----- Build ix data: Anchor discriminator for `claim_winnings` -----
+            // first 8 bytes of sha256("global:claim_winnings")
+            byte[] ixData = new byte[]
+            {
+                161, 215, 24, 59, 14, 236, 242, 221
+            };
+
+            // ----- Get fresh blockhash -----
+            var blockhashResult = await _rpc.GetLatestBlockHashAsync();
+            if (!blockhashResult.WasSuccessful || blockhashResult.Result == null)
+                throw new Exception($"Failed to get latest blockhash: {blockhashResult.Reason}");
+
+            var recentBlockhash = blockhashResult.Result.Value.Blockhash;
+
+            // ----- Accounts: must match Rust order -----
+            var accounts = new List<AccountMeta>
+            {
+                // 0. market (mut)
+                AccountMeta.Writable(marketPk, false),
+
+                // 1. position PDA (mut)
+                AccountMeta.Writable(positionPk, false),
+
+                // 2. user signer (mut) -> authority for MVP
+                AccountMeta.Writable(_authority.PublicKey, true),
+
+                // 3. user_collateral_ata (mut)
+                AccountMeta.Writable(userCollateral, false),
+
+                // 4. vault (mut)
+                AccountMeta.Writable(vaultPk, false),
+
+                // 5. authority signer (owns vault) – same key
+                AccountMeta.ReadOnly(_authority.PublicKey, true),
+
+                // 6. token_program
+                AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false)
+            };
+
+            var ix = new TransactionInstruction
+            {
+                ProgramId = _programId,
+                Keys = accounts,
+                Data = ixData
+            };
+
+            // ----- Build & sign transaction -----
+            var tx = new TransactionBuilder()
+                .SetRecentBlockHash(recentBlockhash)
+                .SetFeePayer(_authority.PublicKey)
+                .AddInstruction(ix)
+                .Build(new[] { _authority });   // authority signs as both user & authority
+
+            // Optional: simulate for logs
+            var simResult = await _rpc.SimulateTransactionAsync(tx);
+            if (!simResult.WasSuccessful || simResult.Result?.Value == null)
+                throw new Exception("Simulation failed: " + simResult.Reason);
+
+            if (simResult.Result.Value.Logs != null)
+            {
+                Console.WriteLine("=== ResolveMarket simulation logs ===");
+                foreach (var log in simResult.Result.Value.Logs)
+                    Console.WriteLine(log);
+                Console.WriteLine("=== End logs ===");
+            }
+
+            var sendResult = await _rpc.SendTransactionAsync(
+                tx,
+                commitment: Commitment.Confirmed
+            );
+
+            if (!sendResult.WasSuccessful)
+                throw new Exception($"Failed to send claim_winnings tx: {sendResult.Reason}");
+
+            return sendResult.Result; // transaction signature
         }
 
         private static byte[] BuildCreateMarketInstructionData(

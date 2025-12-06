@@ -68,8 +68,34 @@ public class BlockchainController : ControllerBase
             result.BettorTokenAccount,
             result.StakeAmount,
             result.OutcomeIndex,
-            result.TransactionSignature );
+            result.TransactionSignature);
 
         return Ok(response);
+    }
+
+    /// <summary>
+    /// Claim winnings for a specific resolved market.
+    /// </summary>
+    [HttpPost("{marketPubkey}/claim")]
+    [Authorize] // must be logged in
+    public async Task<IActionResult> ClaimWinnings(
+        string marketPubkey,
+        [FromBody] ClaimWinningsRequest request,
+        CancellationToken ct)
+    {
+        // For MVP, on-chain `user` == backend authority.
+        // We only need the token accounts from the caller.
+        var txSig = await _client.ClaimWinningsAsync(
+            marketPubkey: marketPubkey,
+            userCollateralAta: request.UserCollateralAta,
+            vaultTokenAccount: request.VaultTokenAccount,
+            ct: ct
+        );
+
+        return Ok(new
+        {
+            MarketPubkey = marketPubkey,
+            TransactionSignature = txSig
+        });
     }
 }

@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using BlockchainService.Inrastructure.Helpers;
+using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using BlockchainService.Api.Services;

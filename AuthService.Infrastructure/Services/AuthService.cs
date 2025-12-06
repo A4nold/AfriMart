@@ -26,7 +26,7 @@ namespace AuthService.Infrastructure.Services
             _jwt = jwtOptions.Value;
         }
 
-        //Helper methods
+        //Helpers
         private static string GenerateRefreshToken()
         {
             var bytes = RandomNumberGenerator.GetBytes(64);
@@ -54,6 +54,8 @@ namespace AuthService.Infrastructure.Services
             return refresh;
         }
 
+
+        //actions
         public async Task<User> SeedAdminAsync(AdminSeedRequest request)
         {
             var normalizedEmail = request.Email.Trim().ToLowerInvariant();
