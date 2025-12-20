@@ -197,8 +197,7 @@ public class MarketService : IMarketService
         market.WinningOutcomeIndex = command.WinningOutcomeIndex;
         market.ResolvedAt = DateTime.UtcNow;
 
-        await _db.SaveChangesAsync(ct);
-
+        //Add entry in market resolution
         var resolution = new MarketResolution
         {
             Id = Guid.NewGuid(),
@@ -212,6 +211,7 @@ public class MarketService : IMarketService
         };
 
         _db.MarketResolutions.Add(resolution);
+        await _db.SaveChangesAsync(ct);
 
         return new MarketResolutionDto
         {
@@ -252,6 +252,9 @@ public class MarketService : IMarketService
             throw new InvalidOperationException("Failed to claim winnings");
         }
 
+        var chainResult = await response.Content.ReadFromJsonAsync<ClaimWinningsOnChainResponse>(ct)
+                            ?? throw new InvalidOperationException("Invalid response from blockchain service");
+
         // mark DB position as claimed.
         var position = await _db.MarketPositions
             .FirstOrDefaultAsync(p => p.MarketId == command.MarketId && p.UserId == command.UserId, ct);
@@ -260,6 +263,7 @@ public class MarketService : IMarketService
         {
             position.Claimed = true;
             position.ClaimedAt = DateTime.UtcNow;
+            position.TxSignature = chainResult.TransactionSignature;
             await _db.SaveChangesAsync(ct);
         }
     }
@@ -270,5 +274,11 @@ public class MarketService : IMarketService
     {
         public string MarketPubkey { get; set; } = default!;
         public string TransactionSignature { get; set; } = default!;
+    }
+
+    private sealed class ClaimWinningsOnChainResponse
+    {
+        public string TransactionSignature { get; set; } = default!;
+
     }
 }
