@@ -1,9 +1,10 @@
 ﻿namespace BlockchainService.Api.Models.Responses;
 
-public record PlaceBetResponse(
+public record BuySharesResponse(
     string MarketPubkey,
-    string BettorTokenAccount,
-    ulong StakeAmount,
+    string UserCollateralAta,
+    ulong MaxCollateralIn,
+    ulong MinSharesOut,
     byte OutcomeIndex,
     string TransactionSignature
 );

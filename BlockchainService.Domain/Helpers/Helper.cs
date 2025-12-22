@@ -10,8 +10,14 @@ namespace BlockchainService.Inrastructure.Helpers
     {
         public string RpcUrl { get; set; } = default!;
         public string ProgramId { get; set; } = default!;
-        // We won’t use AuthorityKeypairPath for now
         public string AuthorityKeypairPath { get; set; } = default!;
+
+        public bool SimulateBeforeSend { get; set; } = true;
+
+        public string Commitment { get; set; } = "processed"; // processed/confirmed/finalized
+        public bool SkipPreflight { get; set; } = false;
+        public uint ComputeUnitLimit { get; set; } = 300_000;
+        public ulong ComputeUnitPriceMicroLamports { get; set; } = 0; // 0 disables priority fees
     }
 
     public class MarketResult
@@ -21,11 +27,22 @@ namespace BlockchainService.Inrastructure.Helpers
         public string TransactionSignature { get; set; } = default!;
     }
 
-    public class PlaceBetResult
+    public class BuyShareResult
     {
         public string MarketPubkey { get; set; } = default!;
-        public string BettorTokenAccount { get; set; } = default!;
-        public ulong StakeAmount { get; set; }
+        public string UserCollateralAta { get; set; } = default!;
+        public ulong MaxCollateralIn { get; set; }
+        public ulong MinSharesOut { get; set; }
+        public byte OutcomeIndex { get; set; }
+        public string TransactionSignature { get; set; } = default!;
+    }
+
+    public class SellShareResult
+    {
+        public string MarketPubkey { get; set; } = default!;
+        public string UserCollateralAta { get; set; } = default!;
+        public ulong SharesIn { get; set; }
+        public ulong MinCollateralOut { get; set; }
         public byte OutcomeIndex { get; set; }
         public string TransactionSignature { get; set; } = default!;
     }

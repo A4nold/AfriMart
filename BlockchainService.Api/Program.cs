@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using BlockchainService.Api.Services;
+using Solnet.Wallet;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,7 +13,7 @@ var jwtKey = jwtSection.GetValue<string>("Key");
 var jwtIssuer = jwtSection.GetValue<string>("Issuer");
 var jwtAudience = jwtSection.GetValue<string>("Audience");
 
-Console.WriteLine($"[Startup] JWT KEY : {jwtKey}");
+//Console.WriteLine($"[Startup] JWT KEY : {jwtKey}");
 Console.WriteLine($"[Startup] JWT ISSUER : {jwtIssuer}");
 Console.WriteLine($"[Startup] JWT AUDIENCE : {jwtAudience}");
 

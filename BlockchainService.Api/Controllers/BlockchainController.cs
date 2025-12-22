@@ -22,11 +22,12 @@ public class BlockchainController : ControllerBase
     public async Task<ActionResult<CreateMarketResponse>> Create([FromBody] CreateMarketRequest request)
     {
         var result = await _client.CreateMarketAsync(
+            request.MarketId,
             request.Question,
-            request.Outcomes,
-            request.EndTime,
+            request.EndTime.ToUniversalTime(),
+            request.InitialLiquidity,
             request.CollateralMint,
-            request.VaultTokenAccount
+            request.AuthorityCollateralAta
         );
 
         var response = new CreateMarketResponse(
@@ -39,9 +40,10 @@ public class BlockchainController : ControllerBase
 
     [Authorize(Roles = "Admin")]
     [HttpPost("{marketPubkey}/resolve")]
-    public async Task<ActionResult<ResolveMarketResponse>> Resolve(string marketPubkey, [FromBody] ResolveMarketRequest request)
+    public async Task<ActionResult<ResolveMarketResponse>> Resolve(string marketPubkey, [FromBody] ResolveMarketRequest request, 
+        CancellationToken ct)
     {
-        var result = await _client.ResolveMarketAsync(marketPubkey, request.WinningOutcomeIndex);
+        var result = await _client.ResolveMarketAsync(marketPubkey, request.WinningOutcomeIndex, ct);
 
         var response = new ResolveMarketResponse(
             result.MarketPubkey,
@@ -52,25 +54,55 @@ public class BlockchainController : ControllerBase
     }
 
     [HttpPost("{marketPubkey}/bet")]
-    public async Task<ActionResult<PlaceBetResponse>> PlaceBet(
-        string marketPubkey,
-        [FromBody] PlaceBetRequest request)
+    public async Task<ActionResult<BuySharesResponse>> BuyShares(
+        [FromRoute] string marketPubkey,
+        [FromBody] BuySharesRequest request, CancellationToken ct)
     {
-        var result = await _client.PlaceBetAsync(
+        var result = await _client.BuySharesAsync(
             marketPubkey,
-            request.BettorTokenAccount,
-            request.VaultTokenAccount,
-            request.StakeAmount,
-            request.OutcomeIndex);
+            request.UserCollateralAta,
+            request.MaxCollateralIn,
+            request.MinSharesOut,
+            request.OutcomeIndex,
+            ct
+        );
 
-        var response = new PlaceBetResponse(
+
+        var response = new BuySharesResponse(
             result.MarketPubkey,
-            result.BettorTokenAccount,
-            result.StakeAmount,
+            result.UserCollateralAta,
+            result.MaxCollateralIn,
+            result.MinSharesOut,
             result.OutcomeIndex,
             result.TransactionSignature);
 
         return Ok(response);
+    }
+    
+    [HttpPost("{marketPubkey}/sell")]
+    [Authorize]
+    public async Task<ActionResult<SellSharesResponse>> SellShares(
+        [FromRoute] string marketPubkey,
+        [FromBody] SellSharesRequest request,
+        CancellationToken ct)
+    {
+        var result = await _client.SellSharesAsync(
+            marketPubkey,
+            request.UserCollateralAta,
+            request.SharesIn,
+            request.MinCollateralOut,
+            request.OutcomeIndex,
+            ct
+        );
+
+        return Ok(new SellSharesResponse(
+            result.MarketPubkey,
+            result.UserCollateralAta,
+            result.SharesIn,
+            result.MinCollateralOut,
+            result.OutcomeIndex,
+            result.TransactionSignature
+        ));
     }
 
     /// <summary>
@@ -88,7 +120,6 @@ public class BlockchainController : ControllerBase
         var txSig = await _client.ClaimWinningsAsync(
             marketPubkey: marketPubkey,
             userCollateralAta: request.UserCollateralAta,
-            vaultTokenAccount: request.VaultTokenAccount,
             ct: ct
         );
 

@@ -1,10 +1,10 @@
 ﻿namespace BlockchainService.Api.Models.Requests;
 
-public class PlaceBetRequest 
+public class BuySharesRequest 
 {
-    public string BettorTokenAccount { get; set; } = default!;
-    public string VaultTokenAccount { get; set; } = default!;
-    public ulong StakeAmount { get; set; }
-    public byte OutcomeIndex { get; set; }
+    public string UserCollateralAta { get; set; } = default!;
+    public ulong MaxCollateralIn { get; set; }
+    public ulong MinSharesOut { get; set; } = 0; // allow 0 for MVP 
+    public byte OutcomeIndex { get; set; } // 0 = YES, 1 = NO
 }
 

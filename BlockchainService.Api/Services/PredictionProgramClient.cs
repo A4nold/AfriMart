@@ -24,8 +24,9 @@ namespace BlockchainService.Api.Services
         private readonly IRpcClient _rpc;
         private readonly Account _authority;
         private readonly PublicKey _programId;
+        private readonly SolanaOptions _cfg;
 
-        public static Account LoadAuthorityAccount(string path)
+        private static Account LoadAuthorityAccount(string path)
         {
             var json = File.ReadAllText(path);
             var keystore = new SolanaKeyStoreService();
@@ -51,6 +52,7 @@ namespace BlockchainService.Api.Services
             Console.WriteLine($"[PredictionProgramClient] ProgramId = '{cfg.ProgramId}'");
             Console.WriteLine($"[PredictionProgramClient] AuthorityKeyPairPath = '{cfg.AuthorityKeypairPath}'");
 
+            _cfg = cfg;
             _rpc = ClientFactory.GetClient(cfg.RpcUrl);
             _programId = new PublicKey(cfg.ProgramId);
 
@@ -60,24 +62,110 @@ namespace BlockchainService.Api.Services
             Console.WriteLine("⚠ Remember to airdrop some devnet SOL to this authority!");
         }
 
+        private Commitment GetCommitment(string commitment)
+            => commitment.ToLowerInvariant() switch
+            {
+                "processed" => Commitment.Processed,
+                "finalized" => Commitment.Finalized,
+                _ => Commitment.Confirmed
+            };
+        
+        private async Task<string> SendAndConfirmAsync(byte[] tx, Commitment commitment, bool skipPreflight, CancellationToken ct = default)
+        {
+            var send = await _rpc.SendTransactionAsync(tx, skipPreflight: skipPreflight, commitment: commitment);
+            if (!send.WasSuccessful)
+                throw new Exception($"SendTransaction failed: {send.Reason}");
+        
+            var sig = send.Result;
+            
+            bool IsAcceptable(string? confirmationStatus)
+            {
+                return commitment switch
+                {
+                    Commitment.Processed => confirmationStatus is "processed" or "confirmed" or "finalized",
+                    Commitment.Confirmed => confirmationStatus is "confirmed" or "finalized",
+                    Commitment.Finalized => confirmationStatus is "finalized",
+                    _ => confirmationStatus is "confirmed" or "finalized"
+                };
+            }
+        
+            // Poll status until confirmed/finalized
+            for (var i = 0; i < 60; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var status = await _rpc.GetSignatureStatusesAsync(new List<string> { sig },
+                    searchTransactionHistory: true);
+                if (status.WasSuccessful && status.Result?.Value != null)
+                {
+                    var s = status.Result.Value.FirstOrDefault();
+                    if (s != null)
+                    {
+                        if (s.Error != null)
+                            throw new Exception($"Transaction failed on-chain: {JsonSerializer.Serialize(s.Error)}");
+        
+                        // If we asked for confirmed, treat confirmed/finalized as success
+                        if (IsAcceptable(s.ConfirmationStatus))
+                            return sig;
+                    }
+                }
+        
+                await Task.Delay(500, ct);
+            }
+        
+            throw new Exception($"Transaction not confirmed in time. Signature: {sig}");
+        }
+
         public async Task<MarketResult> CreateMarketAsync(
+            ulong marketId,
             string question,
-            string[] outcomes,
             DateTime endTimeUtc,
+            ulong initialLiquidity,
             string collateralMint,
-            string vaultTokenAccount)
+            string authorityCollateralAta,
+            CancellationToken ct = default)
         {
             var collateralMintPk = new PublicKey(collateralMint);
-            var vaultPk = new PublicKey(vaultTokenAccount);
+            var authorityCollateralAtaPk = new PublicKey(authorityCollateralAta);
+            
+            var marketIdBytes = BitConverter.GetBytes(marketId); // little-endian on all normal runtimes
+            if (!BitConverter.IsLittleEndian) Array.Reverse(marketIdBytes);
+            
+            if (initialLiquidity == 0)
+                throw new ArgumentException("initialLiquidity must be > 0", nameof(initialLiquidity));
 
-            var marketAccount = new Account();
-            var marketPubkey = marketAccount.PublicKey;
+            // market PDA: ["market_v2", authority, market_id_le]
+            byte[][] marketSeeds =
+            {
+                Encoding.UTF8.GetBytes("market_v2"),
+                _authority.PublicKey.KeyBytes,
+                marketIdBytes 
+            };
+            if (!PublicKey.TryFindProgramAddress(marketSeeds, _programId, out var marketPk, out _))
+                throw new Exception("Failed to derive market PDA.");
+
+            // vault PDA: ["vault_v2", market]
+            byte[][] vaultSeeds =
+            {
+                Encoding.UTF8.GetBytes("vault_v2"),
+                marketPk.KeyBytes
+            };
+            if (!PublicKey.TryFindProgramAddress(vaultSeeds, _programId, out var vaultPk, out _))
+                throw new Exception("Failed to derive vault PDA.");
+
+            // vault authority PDA: ["vault_auth_v2", market]
+            byte[][] vaultAuthSeeds =
+            {
+                Encoding.UTF8.GetBytes("vault_auth_v2"),
+                marketPk.KeyBytes
+            };
+            if (!PublicKey.TryFindProgramAddress(vaultAuthSeeds, _programId, out var vaultAuthorityPk, out _))
+                throw new Exception("Failed to derive vault_authority PDA.");
 
             var ixData = BuildCreateMarketInstructionData(
+                marketId,
                 question,
-                outcomes,
-                collateralMintPk,
-                endTimeUtc
+                endTimeUtc,
+                initialLiquidity
             );
 
             var blockhashResult = await _rpc.GetLatestBlockHashAsync();
@@ -94,10 +182,32 @@ namespace BlockchainService.Api.Services
 
             var accounts = new List<AccountMeta>
             {
-                AccountMeta.Writable(marketPubkey, true),
+                // 0 market (init PDA) - writable, NOT signer
+                AccountMeta.Writable(marketPk, false),
+
+                // 1 vault (init PDA token account) - writable, NOT signer
                 AccountMeta.Writable(vaultPk, false),
+
+                // 2 vault_authority (PDA) - read-only
+                AccountMeta.ReadOnly(vaultAuthorityPk, false),
+
+                // 3 collateral_mint
+                AccountMeta.ReadOnly(collateralMintPk, false),
+
+                // 4 authority (payer)
                 AccountMeta.Writable(_authority.PublicKey, true),
-                AccountMeta.ReadOnly(SystemProgram.ProgramIdKey, false)
+
+                // 5 authority_collateral_ata
+                AccountMeta.Writable(authorityCollateralAtaPk, false),
+
+                // 6 token_program
+                AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false),
+
+                // 7 system_program
+                AccountMeta.ReadOnly(SystemProgram.ProgramIdKey, false),
+
+                // 8 rent
+                AccountMeta.ReadOnly(SysVars.RentKey, false),
             };
 
             var ix = new TransactionInstruction
@@ -107,46 +217,52 @@ namespace BlockchainService.Api.Services
                 Data = ixData
             };
 
-            var tx = new TransactionBuilder()
+            var txBuilder = new TransactionBuilder()
                 .SetRecentBlockHash(recentBlockhash)
-                .SetFeePayer(_authority)
-                .AddInstruction(ix)
-                .Build(new[] { _authority, marketAccount });
+                .SetFeePayer(_authority.PublicKey);
 
-            var simResult = await _rpc.SimulateTransactionAsync(tx);
-
-            if (!simResult.WasSuccessful || simResult.Result?.Value == null) {
-                Console.WriteLine($"[Simulate] failed to simulate transaction: {simResult.Reason}");
-                throw new Exception($"Simualtion Failed: {simResult.Reason}");
-            }
-
-            if (simResult.Result.Value.Logs != null) {
-                Console.WriteLine("=== Simulation Logs ===");
-                foreach (var log in simResult.Result.Value.Logs) 
-                { 
-                  Console.WriteLine(log);  
-                }
-                Console.WriteLine("=== End logs");
-            }
-
-            var txSigResult = await _rpc.SendTransactionAsync(tx);
-            if (!txSigResult.WasSuccessful)
+            foreach (var ixBudget in BuildComputeBudgetIxs())
             {
-                throw new Exception("Failed to send create_market tx: " +
-                                    txSigResult.Reason);
+                txBuilder.AddInstruction(ixBudget);
             }
+
+            txBuilder.AddInstruction(ix);
+            var tx = txBuilder.Build(new[] { _authority });
+            
+            if (_cfg.SimulateBeforeSend)
+            {
+                var simResult = await _rpc.SimulateTransactionAsync(tx);
+                
+                if (!simResult.WasSuccessful || simResult.Result?.Value == null) {
+                    Console.WriteLine($"[Simulate] failed to simulate transaction: {simResult.Reason}");
+                    throw new Exception($"Simualtion Failed: {simResult.Reason}");
+                }
+
+                if (simResult.Result.Value.Logs != null) {
+                    Console.WriteLine("=== Simulation Logs ===");
+                    foreach (var log in simResult.Result.Value.Logs) 
+                    { 
+                        Console.WriteLine(log);  
+                    }
+                    Console.WriteLine("=== End logs");
+                }
+            }
+            
+            
+            var txSignature = await SendAndConfirmAsync(tx, GetCommitment(_cfg.Commitment), _cfg.SkipPreflight, ct);
 
             return new MarketResult
             {
-                MarketAction = "Create Action",
-                MarketPubkey = marketPubkey.Key,
-                TransactionSignature = txSigResult.Result
+                MarketAction = "Create Market Action",
+                MarketPubkey = marketPk.Key,
+                TransactionSignature = txSignature
             };
         }
 
         public async Task<MarketResult> ResolveMarketAsync(
         string marketPubkey,
-        byte outcomeIndex)
+        byte outcomeIndex,
+        CancellationToken ct = default(CancellationToken))
         {
             var marketPk = new PublicKey(marketPubkey);
 
@@ -176,87 +292,120 @@ namespace BlockchainService.Api.Services
                 Data = ixData
             };
 
-            var tx = new TransactionBuilder()
+            var txBuilder = new TransactionBuilder()
                 .SetRecentBlockHash(recentBlockhash)
-                .SetFeePayer(_authority)
-                .AddInstruction(ix)
-                .Build(new[] { _authority });
+                .SetFeePayer(_authority.PublicKey);
 
-            // Optional: simulate for logs
-            var simResult = await _rpc.SimulateTransactionAsync(tx);
-            if (!simResult.WasSuccessful || simResult.Result?.Value == null)
-                throw new Exception("Simulation failed: " + simResult.Reason);
-
-            if (simResult.Result.Value.Logs != null)
+            foreach (var ixBudget in BuildComputeBudgetIxs())
             {
-                Console.WriteLine("=== ResolveMarket simulation logs ===");
-                foreach (var log in simResult.Result.Value.Logs)
-                    Console.WriteLine(log);
-                Console.WriteLine("=== End logs ===");
+                txBuilder.AddInstruction(ixBudget);
             }
 
-            var txSigResult = await _rpc.SendTransactionAsync(tx);
-            if (!txSigResult.WasSuccessful)
-                throw new Exception("Failed to send resolve_market tx: " + txSigResult.Reason);
+            txBuilder.AddInstruction(ix);
+            var tx = txBuilder.Build(new[] { _authority });
+
+            // Optional: simulate for logs
+            if (_cfg.SimulateBeforeSend)
+            {
+                var simResult = await _rpc.SimulateTransactionAsync(tx);
+                if (!simResult.WasSuccessful || simResult.Result?.Value == null)
+                    throw new Exception("Simulation failed: " + simResult.Reason);
+
+                if (simResult.Result.Value.Logs != null)
+                {
+                    Console.WriteLine("=== ResolveMarket simulation logs ===");
+                    foreach (var log in simResult.Result.Value.Logs)
+                        Console.WriteLine(log);
+                    Console.WriteLine("=== End logs ===");
+                } 
+            }
+            
+            var txSignature = await SendAndConfirmAsync(tx, GetCommitment(_cfg.Commitment), _cfg.SkipPreflight);
 
             return new MarketResult
             {
                 MarketAction = "Resolve Market",
                 MarketPubkey = marketPk.Key,
-                TransactionSignature = txSigResult.Result
+                TransactionSignature = txSignature
             };
         }
 
-        public async Task<PlaceBetResult> PlaceBetAsync(
+        public async Task<BuyShareResult> BuySharesAsync(
             string marketPubkey,
-            string bettorTokenAccount,
-            string vaultTokenAccount,
-            ulong stakeAmount,
-            byte outcomeIndex)
+            string userCollateralAta,
+            ulong maxCollateralIn,
+            ulong minSharesOut,
+            byte outcomeIndex,
+            CancellationToken ct = default)
         {
             var marketPk = new PublicKey(marketPubkey);
-            var bettorTokenpk = new PublicKey(bettorTokenAccount);
-            var vaultTokenPk = new PublicKey(vaultTokenAccount);
+            var userCollateralPk = new PublicKey(userCollateralAta);
 
-            //derive position PDA
-            //seeds = [b"position", market.key().as_ref(), user.key().as_ref()]
-            byte[][] seeds =
+            // vault PDA: ["vault_v2", market]
+            byte[][] vaultSeeds =
             {
-                Encoding.UTF8.GetBytes("position"),
-                marketPk.KeyBytes,
-                _authority.PublicKey.KeyBytes //user = authority for now
+                Encoding.UTF8.GetBytes("vault_v2"),
+                marketPk.KeyBytes
             };
+            if (!PublicKey.TryFindProgramAddress(vaultSeeds, _programId, out var vaultPk, out _))
+                throw new Exception("Failed to derive vault PDA.");
 
-            if (!PublicKey.TryFindProgramAddress(seeds, _programId, out var positionPk, out var bumpSeed))
-                throw new Exception($"Failed to derive position PDA.");
+            // vault_authority PDA: ["vault_auth_v2", market]
+            byte[][] vaultAuthSeeds =
+            {
+                Encoding.UTF8.GetBytes("vault_auth_v2"),
+                marketPk.KeyBytes
+            };
+            if (!PublicKey.TryFindProgramAddress(vaultAuthSeeds, _programId, out var vaultAuthorityPk, out _))
+                throw new Exception("Failed to derive vault_authority PDA.");
 
-            //build ix data: discriminator + stake (u64) + outcome_index (u8)
-            var ixData = BuildPlaceBetInstructionDate(stakeAmount, outcomeIndex);
+            // position PDA: ["position_v2", market, user]
+            byte[][] positionSeeds =
+            {
+                Encoding.UTF8.GetBytes("position_v2"),
+                marketPk.KeyBytes,
+                _authority.PublicKey.KeyBytes // MVP user = authority
+            };
+            if (!PublicKey.TryFindProgramAddress(positionSeeds, _programId, out var positionPk, out _))
+                throw new Exception("Failed to derive position PDA.");
 
-            //fresh blockhash
+            // ix data: discriminator("buy_shares") + outcome_index(u8) + max_in(u64) + min_out(u64)
+            var ixData = BuildBuySharesInstructionData(outcomeIndex, maxCollateralIn, minSharesOut);
+
             var blockhashResult = await _rpc.GetLatestBlockHashAsync();
             if (!blockhashResult.WasSuccessful || blockhashResult.Result == null)
                 throw new Exception($"Failed to get latest blockhash: {blockhashResult.Reason}");
 
             var recentBlockhash = blockhashResult.Result.Value.Blockhash;
 
-            //accounts: 
             var accounts = new List<AccountMeta>
             {
-                //0. market
+                // 0 market (mut)
                 AccountMeta.Writable(marketPk, false),
-                //1. position PDA
+
+                // 1 vault (mut)
+                AccountMeta.Writable(vaultPk, false),
+
+                // 2 vault_authority (read-only)
+                AccountMeta.ReadOnly(vaultAuthorityPk, false),
+
+                // 3 position (mut PDA)
                 AccountMeta.Writable(positionPk, false),
-                //2. bettor (signer, mut)
+
+                // 4 user (mut signer)
                 AccountMeta.Writable(_authority.PublicKey, true),
-                //3. bettor_collateral_ata (mut)
-                AccountMeta.Writable(bettorTokenpk, false),
-                //4. vault (mut)
-                AccountMeta.Writable(vaultTokenPk, false),
-                //5. token_program
+
+                // 5 user_collateral_ata (mut)
+                AccountMeta.Writable(userCollateralPk, false),
+
+                // 6 token_program
                 AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false),
-                //6. system_program
+
+                // 7 system_program
                 AccountMeta.ReadOnly(SystemProgram.ProgramIdKey, false),
+
+                // 8 rent
+                AccountMeta.ReadOnly(SysVars.RentKey, false),
             };
 
             var ix = new TransactionInstruction
@@ -266,40 +415,164 @@ namespace BlockchainService.Api.Services
                 Data = ixData
             };
 
-            var tx = new TransactionBuilder()
+            var txBuilder = new TransactionBuilder()
                 .SetRecentBlockHash(recentBlockhash)
-                .SetFeePayer(_authority)
-                .AddInstruction(ix)
-                .Build(new[] { _authority });
+                .SetFeePayer(_authority.PublicKey);
 
-            // Optional: simulate for logs
-            var simResult = await _rpc.SimulateTransactionAsync(tx);
-            if (!simResult.WasSuccessful || simResult.Result?.Value == null)
-                throw new Exception("Simulation failed: " + simResult.Reason);
+            foreach (var ixBudget in BuildComputeBudgetIxs())
+                txBuilder.AddInstruction(ixBudget);
 
-            if (simResult.Result.Value.Logs != null)
+            txBuilder.AddInstruction(ix);
+
+            var tx = txBuilder.Build(new[] { _authority });
+
+            if (_cfg.SimulateBeforeSend)
             {
-                Console.WriteLine("=== PlaceBet simulation logs ===");
-                foreach (var log in simResult.Result.Value.Logs)
-                    Console.WriteLine(log);
-                Console.WriteLine("=== End logs ===");
+                var sim = await _rpc.SimulateTransactionAsync(tx);
+                if (!sim.WasSuccessful || sim.Result?.Value == null)
+                    throw new Exception("Simulation failed: " + sim.Reason);
+
+                if (sim.Result.Value.Logs != null)
+                    foreach (var log in sim.Result.Value.Logs) Console.WriteLine(log);
             }
 
-            var txSigResult = await _rpc.SendTransactionAsync(tx);
-            if (!txSigResult.WasSuccessful)
-                throw new Exception("Failed to send place_bet tx: " + txSigResult.Reason);
+            var sig = await SendAndConfirmAsync(tx, GetCommitment(_cfg.Commitment), _cfg.SkipPreflight, ct);
 
-            Console.WriteLine($"[PlaceBet] Tx signature: {txSigResult.Result}");
-
-            return new PlaceBetResult
+            return new BuyShareResult
             {
                 MarketPubkey = marketPk.Key,
-                BettorTokenAccount = bettorTokenpk.Key,
-                StakeAmount = stakeAmount,
+                UserCollateralAta = userCollateralPk.Key,
+                MaxCollateralIn = maxCollateralIn,
                 OutcomeIndex = outcomeIndex,
-                TransactionSignature = txSigResult.Result
+                TransactionSignature = sig
             };
         }
+        
+        public async Task<SellShareResult> SellSharesAsync(
+            string marketPubkey,
+            string userCollateralAta,
+            ulong sharesIn,
+            ulong minCollateralOut,
+            byte outcomeIndex,
+            CancellationToken ct = default)
+        {
+            if (outcomeIndex > 1) throw new ArgumentOutOfRangeException(nameof(outcomeIndex), "OutcomeIndex must be 0 or 1.");
+            if (sharesIn == 0) throw new ArgumentException("SharesIn must be > 0", nameof(sharesIn));
+
+            var marketPk = new PublicKey(marketPubkey);
+            var userCollateralPk = new PublicKey(userCollateralAta);
+
+            // vault PDA: ["vault_v2", market]
+            byte[][] vaultSeeds =
+            {
+                Encoding.UTF8.GetBytes("vault_v2"),
+                marketPk.KeyBytes
+            };
+            if (!PublicKey.TryFindProgramAddress(vaultSeeds, _programId, out var vaultPk, out _))
+                throw new Exception("Failed to derive vault PDA.");
+
+            // vault_authority PDA: ["vault_auth_v2", market]
+            byte[][] vaultAuthSeeds =
+            {
+                Encoding.UTF8.GetBytes("vault_auth_v2"),
+                marketPk.KeyBytes
+            };
+            if (!PublicKey.TryFindProgramAddress(vaultAuthSeeds, _programId, out var vaultAuthorityPk, out _))
+                throw new Exception("Failed to derive vault_authority PDA.");
+
+            // position PDA: ["position_v2", market, user]
+            byte[][] positionSeeds =
+            {
+                Encoding.UTF8.GetBytes("position_v2"),
+                marketPk.KeyBytes,
+                _authority.PublicKey.KeyBytes // MVP: user == authority
+            };
+            if (!PublicKey.TryFindProgramAddress(positionSeeds, _programId, out var positionPk, out _))
+                throw new Exception("Failed to derive position PDA.");
+
+            // ix data: discriminator("sell_shares") + outcome_index(u8) + shares_in(u64) + min_collateral_out(u64)
+            var ixData = BuildSellSharesInstructionData(outcomeIndex, sharesIn, minCollateralOut);
+
+            var blockhashResult = await _rpc.GetLatestBlockHashAsync();
+            if (!blockhashResult.WasSuccessful || blockhashResult.Result == null)
+                throw new Exception($"Failed to get latest blockhash: {blockhashResult.Reason}");
+
+            var recentBlockhash = blockhashResult.Result.Value.Blockhash;
+
+            // Must match Anchor SellShares order exactly
+            var accounts = new List<AccountMeta>
+            {
+                // 0 market (mut)
+                AccountMeta.Writable(marketPk, false),
+
+                // 1 vault (mut)
+                AccountMeta.Writable(vaultPk, false),
+
+                // 2 vault_authority (read-only)
+                AccountMeta.ReadOnly(vaultAuthorityPk, false),
+
+                // 3 position (mut)
+                AccountMeta.Writable(positionPk, false),
+
+                // 4 user (mut, signer)
+                AccountMeta.Writable(_authority.PublicKey, true),
+
+                // 5 user_collateral_ata (mut)
+                AccountMeta.Writable(userCollateralPk, false),
+
+                // 6 token_program
+                AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false),
+            };
+
+            var ix = new TransactionInstruction
+            {
+                ProgramId = _programId,
+                Keys = accounts,
+                Data = ixData
+            };
+
+            var txBuilder = new TransactionBuilder()
+                .SetRecentBlockHash(recentBlockhash)
+                .SetFeePayer(_authority.PublicKey);
+
+            foreach (var ixBudget in BuildComputeBudgetIxs())
+                txBuilder.AddInstruction(ixBudget);
+
+            txBuilder.AddInstruction(ix);
+
+            var tx = txBuilder.Build(new[] { _authority });
+
+            if (_cfg.SimulateBeforeSend)
+            {
+                var sim = await _rpc.SimulateTransactionAsync(tx);
+                if (!sim.WasSuccessful || sim.Result?.Value == null)
+                    throw new Exception("Simulation failed: " + sim.Reason);
+
+                if (sim.Result.Value.Logs != null)
+                {
+                    Console.WriteLine("=== sell_shares simulation logs ===");
+                    foreach (var log in sim.Result.Value.Logs) Console.WriteLine(log);
+                    Console.WriteLine("=== end logs ===");
+                }
+
+                // Optional: fail fast if simulation returned an error object
+                if (sim.Result.Value.Error != null)
+                    throw new Exception($"Simulation error: {JsonSerializer.Serialize(sim.Result.Value.Error)}");
+            }
+
+            var sig = await SendAndConfirmAsync(tx, GetCommitment(_cfg.Commitment), _cfg.SkipPreflight, ct);
+
+            return new SellShareResult
+            {
+                MarketPubkey = marketPk.Key,
+                UserCollateralAta = userCollateralPk.Key,
+                SharesIn = sharesIn,
+                MinCollateralOut = minCollateralOut,
+                OutcomeIndex = outcomeIndex,
+                TransactionSignature = sig
+            };
+        }
+
 
         /// <summary>
         /// Claims winnings for the current (MVP) user = authority.
@@ -309,18 +582,35 @@ namespace BlockchainService.Api.Services
         public async Task<string> ClaimWinningsAsync(
             string marketPubkey,
             string userCollateralAta,
-            string vaultTokenAccount,
             CancellationToken ct = default)
         {
             var marketPk = new PublicKey(marketPubkey);
             var userCollateral = new PublicKey(userCollateralAta);
-            var vaultPk = new PublicKey(vaultTokenAccount);
+            // vault PDA: seeds = [b"vault_v2", market.key()]
+            byte[][] vaultSeeds =
+            {
+                Encoding.UTF8.GetBytes("vault_v2"),
+                marketPk.KeyBytes
+            };
 
-            // In the Rust program, seeds = [b"position", market.key(), user.key()]
+            if (!PublicKey.TryFindProgramAddress(vaultSeeds, _programId, out var vaultPk, out _))
+                throw new Exception("Failed to derive vault PDA.");
+            
+            // vault_authority PDA: seeds = [b"vault_auth_v2", market.key()]
+            byte[][] vaultAuthSeeds =
+            {
+                Encoding.UTF8.GetBytes("vault_auth_v2"),
+                marketPk.KeyBytes
+            };
+
+            if (!PublicKey.TryFindProgramAddress(vaultAuthSeeds, _programId, out var vaultAuthorityPk, out _))
+                throw new Exception("Failed to derive vault_authority PDA.");
+            
+            // In the Rust program, seeds = [b"position_v2", market.key(), user.key()]
             // For MVP, user == authority.
             byte[][] seeds =
             {
-                Encoding.UTF8.GetBytes("position"),
+                Encoding.UTF8.GetBytes("position_v2"),
                 marketPk.KeyBytes,
                 _authority.PublicKey.KeyBytes
             };
@@ -329,11 +619,8 @@ namespace BlockchainService.Api.Services
                 throw new Exception($"Failed to derive position PDA.");
 
             // ----- Build ix data: Anchor discriminator for `claim_winnings` -----
-            // first 8 bytes of sha256("global:claim_winnings")
-            byte[] ixData = new byte[]
-            {
-                161, 215, 24, 59, 14, 236, 242, 221
-            };
+            // Anchor discriminator = first 8 bytes of sha256("global:claim_winnings_v2")
+            var ixData = GetAnchorDiscriminator("global", "claim_winnings_v2");
 
             // ----- Get fresh blockhash -----
             var blockhashResult = await _rpc.GetLatestBlockHashAsync();
@@ -348,23 +635,23 @@ namespace BlockchainService.Api.Services
                 // 0. market (mut)
                 AccountMeta.Writable(marketPk, false),
 
-                // 1. position PDA (mut)
-                AccountMeta.Writable(positionPk, false),
-
-                // 2. user signer (mut) -> authority for MVP
-                AccountMeta.Writable(_authority.PublicKey, true),
-
-                // 3. user_collateral_ata (mut)
-                AccountMeta.Writable(userCollateral, false),
-
-                // 4. vault (mut)
+                // 1. vault (mut)
                 AccountMeta.Writable(vaultPk, false),
 
-                // 5. authority signer (owns vault) – same key
-                AccountMeta.ReadOnly(_authority.PublicKey, true),
+                // 2. vault_authority (read-only, NOT signer)
+                AccountMeta.ReadOnly(vaultAuthorityPk, false),
+
+                // 3. position PDA (mut)
+                AccountMeta.Writable(positionPk, false),
+
+                // 4. user (mut, signer)
+                AccountMeta.Writable(_authority.PublicKey, true),
+
+                // 5. user_collateral_ata (mut)
+                AccountMeta.Writable(userCollateral, false),
 
                 // 6. token_program
-                AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false)
+                AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false),
             };
 
             var ix = new TransactionInstruction
@@ -375,61 +662,56 @@ namespace BlockchainService.Api.Services
             };
 
             // ----- Build & sign transaction -----
-            var tx = new TransactionBuilder()
+            var txBuilder = new TransactionBuilder()
                 .SetRecentBlockHash(recentBlockhash)
-                .SetFeePayer(_authority.PublicKey)
-                .AddInstruction(ix)
-                .Build(new[] { _authority });   // authority signs as both user & authority
+                .SetFeePayer(_authority.PublicKey);
 
-            // Optional: simulate for logs
-            var simResult = await _rpc.SimulateTransactionAsync(tx);
-            if (!simResult.WasSuccessful || simResult.Result?.Value == null)
-                throw new Exception("Simulation failed: " + simResult.Reason);
-
-            if (simResult.Result.Value.Logs != null)
+            foreach (var ixBudget in BuildComputeBudgetIxs())
             {
-                Console.WriteLine("=== ResolveMarket simulation logs ===");
-                foreach (var log in simResult.Result.Value.Logs)
-                    Console.WriteLine(log);
-                Console.WriteLine("=== End logs ===");
+                txBuilder.AddInstruction(ixBudget);
             }
 
-            var sendResult = await _rpc.SendTransactionAsync(
-                tx,
-                commitment: Commitment.Confirmed
-            );
+            txBuilder.AddInstruction(ix);
+            var tx = txBuilder.Build(new[] { _authority });   // authority signs as both user & authority
 
-            if (!sendResult.WasSuccessful)
-                throw new Exception($"Failed to send claim_winnings tx: {sendResult.Reason}");
+            // Optional: simulate for logs
+            if (_cfg.SimulateBeforeSend)
+            {
+                var simResult = await _rpc.SimulateTransactionAsync(tx);
+                if (!simResult.WasSuccessful || simResult.Result?.Value == null)
+                    throw new Exception("Simulation failed: " + simResult.Reason);
 
-            return sendResult.Result; // transaction signature
+                if (simResult.Result.Value.Logs != null)
+                {
+                    Console.WriteLine("=== ClaimWinnings simulation logs ===");
+                    foreach (var log in simResult.Result.Value.Logs)
+                        Console.WriteLine(log);
+                    Console.WriteLine("=== End logs ===");
+                }
+            }
+            
+            var sendResult = await SendAndConfirmAsync(tx, GetCommitment(_cfg.Commitment), _cfg.SkipPreflight, ct);
+            return sendResult; // transaction signature
         }
 
         private static byte[] BuildCreateMarketInstructionData(
+            ulong marketId,
             string question,
-            string[] outcomes,
-            PublicKey collateralMint,
-            DateTime endTimeUtc)
+            DateTime endTimeUtc,
+            ulong initialLiquidity)
         {
             using var ms = new MemoryStream();
             using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
 
-            var discriminator = GetAnchorDiscriminator("global", "create_market");
-            bw.Write(discriminator);
+            bw.Write(GetAnchorDiscriminator("global", "create_market_cpmm"));
 
+            bw.Write(marketId); // u64 LE
             WriteBorshString(bw, question);
 
-            bw.Write((int)outcomes.Length);
-            foreach (var outcome in outcomes)
-            {
-                WriteBorshString(bw, outcome);
-            }
+            long endTime = new DateTimeOffset(endTimeUtc.ToUniversalTime()).ToUnixTimeSeconds();
+            bw.Write(endTime); // i64 LE
 
-            bw.Write(collateralMint.KeyBytes);
-
-            long unixSeconds = new DateTimeOffset(endTimeUtc.ToUniversalTime())
-                .ToUnixTimeSeconds();
-            bw.Write(unixSeconds);
+            bw.Write(initialLiquidity); // u64 LE
 
             bw.Flush();
             return ms.ToArray();
@@ -466,24 +748,45 @@ namespace BlockchainService.Api.Services
             return ms.ToArray();
         }
 
-        private static byte[] BuildPlaceBetInstructionDate(ulong stakeAmount, byte outcomeIndex)
+        private static byte[] BuildBuySharesInstructionData(byte outcomeIndex, ulong maxCollateralIn, ulong minSharesOut)
         {
             using var ms = new MemoryStream();
             using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
 
-            // 1) discriminator: "global:place_bet"
-            var discriminator = GetAnchorDiscriminator("global", "place_bet");
-            bw.Write(discriminator);
-
-            //Important must match Rust arg order:
-            // 2) outcome_index: u8 (first arg)
-            bw.Write(outcomeIndex);
-
-            //3) amount: u64 (second arg)
-            bw.Write(stakeAmount);
+            bw.Write(GetAnchorDiscriminator("global", "buy_shares"));
+            bw.Write(outcomeIndex);       // u8
+            bw.Write(maxCollateralIn);    // u64
+            bw.Write(minSharesOut);       // u64
 
             bw.Flush();
             return ms.ToArray();
         }
+        
+        private static byte[] BuildSellSharesInstructionData(byte outcomeIndex, ulong sharesIn, ulong minCollateralOut)
+        {
+            using var ms = new MemoryStream();
+            using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+
+            bw.Write(GetAnchorDiscriminator("global", "sell_shares"));
+            bw.Write(outcomeIndex);     // u8
+            bw.Write(sharesIn);         // u64
+            bw.Write(minCollateralOut); // u64
+
+            bw.Flush();
+            return ms.ToArray();
+        }
+        
+        private IEnumerable<TransactionInstruction> BuildComputeBudgetIxs()
+        {
+            yield return ComputeBudgetProgram.SetComputeUnitLimit(_cfg.ComputeUnitLimit);
+
+            if (_cfg.ComputeUnitPriceMicroLamports > 0)
+            {
+                yield return ComputeBudgetProgram.SetComputeUnitPrice(
+                    _cfg.ComputeUnitPriceMicroLamports
+                );
+            }
+        }
+
     }
 }

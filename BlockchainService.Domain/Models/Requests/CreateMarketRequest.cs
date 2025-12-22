@@ -1,10 +1,11 @@
 ﻿namespace BlockchainService.Api.Models.Requests;
 
 public record CreateMarketRequest(
+    ulong MarketId,
     string Question,
-    string[] Outcomes,
     DateTime EndTime,
+    ulong InitialLiquidity,
     string CollateralMint,
-    string VaultTokenAccount
+    string AuthorityCollateralAta
 );
 
