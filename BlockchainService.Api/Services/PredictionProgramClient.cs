@@ -121,11 +121,13 @@ namespace BlockchainService.Api.Services
             DateTime endTimeUtc,
             ulong initialLiquidity,
             string collateralMint,
-            string authorityCollateralAta,
             CancellationToken ct = default)
         {
             var collateralMintPk = new PublicKey(collateralMint);
-            var authorityCollateralAtaPk = new PublicKey(authorityCollateralAta);
+            var authorityPk = _authority.PublicKey;
+            // Ensure authority ATA exists (payer = authority)
+            var (authorityAta, createAuthorityAtaIx) =
+                await EnsureAtaIxAsync(authorityPk, collateralMintPk, authorityPk, ct);
             
             var marketIdBytes = BitConverter.GetBytes(marketId); // little-endian on all normal runtimes
             if (!BitConverter.IsLittleEndian) Array.Reverse(marketIdBytes);
@@ -137,7 +139,7 @@ namespace BlockchainService.Api.Services
             byte[][] marketSeeds =
             {
                 Encoding.UTF8.GetBytes("market_v2"),
-                _authority.PublicKey.KeyBytes,
+                authorityPk.KeyBytes,
                 marketIdBytes 
             };
             if (!PublicKey.TryFindProgramAddress(marketSeeds, _programId, out var marketPk, out _))
@@ -195,10 +197,10 @@ namespace BlockchainService.Api.Services
                 AccountMeta.ReadOnly(collateralMintPk, false),
 
                 // 4 authority (payer)
-                AccountMeta.Writable(_authority.PublicKey, true),
+                AccountMeta.Writable(authorityPk, true),
 
                 // 5 authority_collateral_ata
-                AccountMeta.Writable(authorityCollateralAtaPk, false),
+                AccountMeta.Writable(authorityAta, false),
 
                 // 6 token_program
                 AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false),
@@ -219,12 +221,16 @@ namespace BlockchainService.Api.Services
 
             var txBuilder = new TransactionBuilder()
                 .SetRecentBlockHash(recentBlockhash)
-                .SetFeePayer(_authority.PublicKey);
+                .SetFeePayer(authorityPk);
 
             foreach (var ixBudget in BuildComputeBudgetIxs())
             {
                 txBuilder.AddInstruction(ixBudget);
             }
+            
+            // If ATA missing, create it
+            if (createAuthorityAtaIx != null)
+                txBuilder.AddInstruction(createAuthorityAtaIx);
 
             txBuilder.AddInstruction(ix);
             var tx = txBuilder.Build(new[] { _authority });
@@ -320,7 +326,7 @@ namespace BlockchainService.Api.Services
                 } 
             }
             
-            var txSignature = await SendAndConfirmAsync(tx, GetCommitment(_cfg.Commitment), _cfg.SkipPreflight);
+            var txSignature = await SendAndConfirmAsync(tx, GetCommitment(_cfg.Commitment), _cfg.SkipPreflight, ct);
 
             return new MarketResult
             {
@@ -332,14 +338,21 @@ namespace BlockchainService.Api.Services
 
         public async Task<BuyShareResult> BuySharesAsync(
             string marketPubkey,
-            string userCollateralAta,
             ulong maxCollateralIn,
             ulong minSharesOut,
             byte outcomeIndex,
             CancellationToken ct = default)
         {
             var marketPk = new PublicKey(marketPubkey);
-            var userCollateralPk = new PublicKey(userCollateralAta);
+            // Fetch collateral mint from on-chain market account
+            var collateralMintPk = await GetMarketCollateralMintAsync(marketPk, ct);
+            
+            // MVP user = authority
+            var userPk = _authority.PublicKey;
+            
+            // Ensure user's collateral ATA exists (create if missing)
+            var (userCollateralAtaPk, createUserAtaIx) =
+                await EnsureAtaIxAsync(userPk, collateralMintPk, feePayer: _authority.PublicKey, ct);
 
             // vault PDA: ["vault_v2", market]
             byte[][] vaultSeeds =
@@ -364,7 +377,7 @@ namespace BlockchainService.Api.Services
             {
                 Encoding.UTF8.GetBytes("position_v2"),
                 marketPk.KeyBytes,
-                _authority.PublicKey.KeyBytes // MVP user = authority
+                userPk.KeyBytes // MVP user = authority
             };
             if (!PublicKey.TryFindProgramAddress(positionSeeds, _programId, out var positionPk, out _))
                 throw new Exception("Failed to derive position PDA.");
@@ -393,10 +406,10 @@ namespace BlockchainService.Api.Services
                 AccountMeta.Writable(positionPk, false),
 
                 // 4 user (mut signer)
-                AccountMeta.Writable(_authority.PublicKey, true),
+                AccountMeta.Writable(userPk, true),
 
                 // 5 user_collateral_ata (mut)
-                AccountMeta.Writable(userCollateralPk, false),
+                AccountMeta.Writable(userCollateralAtaPk, false),
 
                 // 6 token_program
                 AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false),
@@ -421,6 +434,10 @@ namespace BlockchainService.Api.Services
 
             foreach (var ixBudget in BuildComputeBudgetIxs())
                 txBuilder.AddInstruction(ixBudget);
+            
+            // Create ATA first if needed
+            if (createUserAtaIx != null)
+                txBuilder.AddInstruction(createUserAtaIx);
 
             txBuilder.AddInstruction(ix);
 
@@ -441,7 +458,7 @@ namespace BlockchainService.Api.Services
             return new BuyShareResult
             {
                 MarketPubkey = marketPk.Key,
-                UserCollateralAta = userCollateralPk.Key,
+                UserCollateralAta = userCollateralAtaPk.Key,
                 MaxCollateralIn = maxCollateralIn,
                 OutcomeIndex = outcomeIndex,
                 TransactionSignature = sig
@@ -450,7 +467,6 @@ namespace BlockchainService.Api.Services
         
         public async Task<SellShareResult> SellSharesAsync(
             string marketPubkey,
-            string userCollateralAta,
             ulong sharesIn,
             ulong minCollateralOut,
             byte outcomeIndex,
@@ -460,7 +476,16 @@ namespace BlockchainService.Api.Services
             if (sharesIn == 0) throw new ArgumentException("SharesIn must be > 0", nameof(sharesIn));
 
             var marketPk = new PublicKey(marketPubkey);
-            var userCollateralPk = new PublicKey(userCollateralAta);
+            
+            // MVP user = authority
+            var userPk = _authority.PublicKey;
+            
+            // Fetch collateral mint from on-chain market account
+            var collateralMintPk = await GetMarketCollateralMintAsync(marketPk, ct);
+            
+            // Ensure user's collateral ATA exists (create if missing)
+            var (userCollateralAtaPk, createUserAtaIx) =
+                await EnsureAtaIxAsync(userPk, collateralMintPk, feePayer: _authority.PublicKey, ct);
 
             // vault PDA: ["vault_v2", market]
             byte[][] vaultSeeds =
@@ -485,7 +510,7 @@ namespace BlockchainService.Api.Services
             {
                 Encoding.UTF8.GetBytes("position_v2"),
                 marketPk.KeyBytes,
-                _authority.PublicKey.KeyBytes // MVP: user == authority
+                userPk.KeyBytes // MVP: user == authority
             };
             if (!PublicKey.TryFindProgramAddress(positionSeeds, _programId, out var positionPk, out _))
                 throw new Exception("Failed to derive position PDA.");
@@ -515,13 +540,13 @@ namespace BlockchainService.Api.Services
                 AccountMeta.Writable(positionPk, false),
 
                 // 4 user (mut, signer)
-                AccountMeta.Writable(_authority.PublicKey, true),
+                AccountMeta.Writable(userPk, true),
 
                 // 5 user_collateral_ata (mut)
-                AccountMeta.Writable(userCollateralPk, false),
+                AccountMeta.Writable(userCollateralAtaPk, false),
 
                 // 6 token_program
-                AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false),
+                AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false)
             };
 
             var ix = new TransactionInstruction
@@ -537,6 +562,10 @@ namespace BlockchainService.Api.Services
 
             foreach (var ixBudget in BuildComputeBudgetIxs())
                 txBuilder.AddInstruction(ixBudget);
+            
+            // Create ATA first if needed
+            if (createUserAtaIx != null)
+                txBuilder.AddInstruction(createUserAtaIx);
 
             txBuilder.AddInstruction(ix);
 
@@ -565,7 +594,7 @@ namespace BlockchainService.Api.Services
             return new SellShareResult
             {
                 MarketPubkey = marketPk.Key,
-                UserCollateralAta = userCollateralPk.Key,
+                UserCollateralAta = userCollateralAtaPk.Key,
                 SharesIn = sharesIn,
                 MinCollateralOut = minCollateralOut,
                 OutcomeIndex = outcomeIndex,
@@ -577,80 +606,68 @@ namespace BlockchainService.Api.Services
         /// <summary>
         /// Claims winnings for the current (MVP) user = authority.
         /// This matches the Anchor ClaimWinnings accounts exactly:
-        /// market, position PDA, user, user_collateral_ata, vault, authority, token_program.
         /// </summary>
         public async Task<string> ClaimWinningsAsync(
             string marketPubkey,
-            string userCollateralAta,
             CancellationToken ct = default)
         {
             var marketPk = new PublicKey(marketPubkey);
-            var userCollateral = new PublicKey(userCollateralAta);
-            // vault PDA: seeds = [b"vault_v2", market.key()]
+
+            // MVP user = authority
+            var userPk = _authority.PublicKey;
+
+            // Fetch collateral mint from on-chain market account
+            var collateralMintPk = await GetMarketCollateralMintAsync(marketPk, ct);
+
+            // Ensure user's collateral ATA exists (create if missing)
+            var (userCollateralAtaPk, createUserAtaIx) =
+                await EnsureAtaIxAsync(userPk, collateralMintPk, feePayer: _authority.PublicKey, ct);
+
+            // vault PDA: [b"vault_v2", market]
             byte[][] vaultSeeds =
             {
                 Encoding.UTF8.GetBytes("vault_v2"),
                 marketPk.KeyBytes
             };
-
             if (!PublicKey.TryFindProgramAddress(vaultSeeds, _programId, out var vaultPk, out _))
                 throw new Exception("Failed to derive vault PDA.");
-            
-            // vault_authority PDA: seeds = [b"vault_auth_v2", market.key()]
+
+            // vault_authority PDA: [b"vault_auth_v2", market]
             byte[][] vaultAuthSeeds =
             {
                 Encoding.UTF8.GetBytes("vault_auth_v2"),
                 marketPk.KeyBytes
             };
-
             if (!PublicKey.TryFindProgramAddress(vaultAuthSeeds, _programId, out var vaultAuthorityPk, out _))
                 throw new Exception("Failed to derive vault_authority PDA.");
-            
-            // In the Rust program, seeds = [b"position_v2", market.key(), user.key()]
-            // For MVP, user == authority.
-            byte[][] seeds =
+
+            // position PDA: [b"position_v2", market, user]
+            byte[][] positionSeeds =
             {
                 Encoding.UTF8.GetBytes("position_v2"),
                 marketPk.KeyBytes,
-                _authority.PublicKey.KeyBytes
+                userPk.KeyBytes
             };
+            if (!PublicKey.TryFindProgramAddress(positionSeeds, _programId, out var positionPk, out _))
+                throw new Exception("Failed to derive position PDA.");
 
-            if (!PublicKey.TryFindProgramAddress(seeds, _programId, out var positionPk, out var bumpSeed))
-                throw new Exception($"Failed to derive position PDA.");
-
-            // ----- Build ix data: Anchor discriminator for `claim_winnings` -----
-            // Anchor discriminator = first 8 bytes of sha256("global:claim_winnings_v2")
+            // discriminator only
             var ixData = GetAnchorDiscriminator("global", "claim_winnings_v2");
 
-            // ----- Get fresh blockhash -----
             var blockhashResult = await _rpc.GetLatestBlockHashAsync();
             if (!blockhashResult.WasSuccessful || blockhashResult.Result == null)
                 throw new Exception($"Failed to get latest blockhash: {blockhashResult.Reason}");
 
             var recentBlockhash = blockhashResult.Result.Value.Blockhash;
 
-            // ----- Accounts: must match Rust order -----
             var accounts = new List<AccountMeta>
             {
-                // 0. market (mut)
                 AccountMeta.Writable(marketPk, false),
-
-                // 1. vault (mut)
                 AccountMeta.Writable(vaultPk, false),
-
-                // 2. vault_authority (read-only, NOT signer)
                 AccountMeta.ReadOnly(vaultAuthorityPk, false),
-
-                // 3. position PDA (mut)
                 AccountMeta.Writable(positionPk, false),
-
-                // 4. user (mut, signer)
-                AccountMeta.Writable(_authority.PublicKey, true),
-
-                // 5. user_collateral_ata (mut)
-                AccountMeta.Writable(userCollateral, false),
-
-                // 6. token_program
+                AccountMeta.Writable(userPk, true),
+                AccountMeta.Writable(userCollateralAtaPk, false),
                 AccountMeta.ReadOnly(TokenProgram.ProgramIdKey, false),
             };
 
@@ -661,20 +678,21 @@ namespace BlockchainService.Api.Services
                 Data = ixData
             };
 
-            // ----- Build & sign transaction -----
             var txBuilder = new TransactionBuilder()
                 .SetRecentBlockHash(recentBlockhash)
                 .SetFeePayer(_authority.PublicKey);
 
             foreach (var ixBudget in BuildComputeBudgetIxs())
-            {
                 txBuilder.AddInstruction(ixBudget);
-            }
+
+            // Create ATA first if needed
+            if (createUserAtaIx != null)
+                txBuilder.AddInstruction(createUserAtaIx);
 
             txBuilder.AddInstruction(ix);
-            var tx = txBuilder.Build(new[] { _authority });   // authority signs as both user & authority
 
-            // Optional: simulate for logs
+            var tx = txBuilder.Build(new[] { _authority });
+
             if (_cfg.SimulateBeforeSend)
             {
                 var simResult = await _rpc.SimulateTransactionAsync(tx);
@@ -688,12 +706,14 @@ namespace BlockchainService.Api.Services
                         Console.WriteLine(log);
                     Console.WriteLine("=== End logs ===");
                 }
-            }
-            
-            var sendResult = await SendAndConfirmAsync(tx, GetCommitment(_cfg.Commitment), _cfg.SkipPreflight, ct);
-            return sendResult; // transaction signature
-        }
 
+                if (simResult.Result.Value.Error != null)
+                    throw new Exception($"Simulation error: {JsonSerializer.Serialize(simResult.Result.Value.Error)}");
+            }
+
+            return await SendAndConfirmAsync(tx, GetCommitment(_cfg.Commitment), _cfg.SkipPreflight, ct);
+        }
+        
         private static byte[] BuildCreateMarketInstructionData(
             ulong marketId,
             string question,
@@ -787,6 +807,86 @@ namespace BlockchainService.Api.Services
                 );
             }
         }
+        
+        private PublicKey DeriveAta(PublicKey owner, PublicKey mint)
+        {
+            // Standard ATA derivation (Associated Token Program)
+            // Solnet helper exists in Wallet.Utilities
+            return AssociatedTokenAccountProgram.DeriveAssociatedTokenAccount(owner, mint);
+        }
+
+        private async Task<(PublicKey Ata, TransactionInstruction? CreateIx)> EnsureAtaIxAsync(
+            PublicKey owner,
+            PublicKey mint,
+            PublicKey feePayer,
+            CancellationToken ct = default)
+        {
+            var ata = DeriveAta(owner, mint);
+
+            // If it already exists, no need to create
+            var acc = await _rpc.GetAccountInfoAsync(ata, commitment: Commitment.Confirmed);
+            if (acc.WasSuccessful && acc.Result?.Value != null)
+            {
+                return (ata, null);
+            }
+
+            // Create ATA instruction (payer funds rent, owner owns ATA)
+            var ix = AssociatedTokenAccountProgram.CreateAssociatedTokenAccount(
+                payer: feePayer,
+                owner: owner,
+                mint: mint
+            );
+
+            return (ata, ix);
+        }
+        
+        private async Task<PublicKey> GetMarketCollateralMintAsync(PublicKey marketPk, CancellationToken ct = default)
+        {
+            var resp = await _rpc.GetAccountInfoAsync(marketPk, commitment: Commitment.Confirmed);
+
+            if (!resp.WasSuccessful || resp.Result?.Value == null)
+                throw new Exception($"Failed to fetch market account: {resp.Reason}");
+
+            // Solnet typically returns data as base64 string in Value.Data[0]
+            // depending on version: Data may be string[] { base64, "base64" } or similar
+            var dataField = resp.Result.Value.Data;
+            if (dataField == null || dataField.Count == 0 || string.IsNullOrWhiteSpace(dataField[0]))
+                throw new Exception("Market account data is empty.");
+
+            var raw = Convert.FromBase64String(dataField[0]);
+
+            // Anchor account discriminator is first 8 bytes
+            const int anchorDiscriminatorLen = 8;
+            if (raw.Length < anchorDiscriminatorLen + 8 + 32 + 4 + 32 + 32 + 8 + 1 + 1 + 8 + 8 + 8 + 8)
+                throw new Exception("Market account data too small to be MarketV2.");
+
+            using var ms = new MemoryStream(raw);
+            using var br = new BinaryReader(ms);
+
+            br.ReadBytes(anchorDiscriminatorLen);
+
+            // MarketV2 layout (Borsh / AnchorSerialize order):
+            // market_id: u64
+            _ = br.ReadUInt64();
+
+            // authority: Pubkey (32)
+            _ = br.ReadBytes(32);
+
+            // question: String (u32 little-endian length + bytes)
+            var qLen = br.ReadUInt32();
+            if (qLen > 10_000) // sanity guard; max is 256 but keep it safe
+                throw new Exception($"Market question length looks wrong: {qLen}");
+
+            br.ReadBytes((int)qLen);
+
+            // collateral_mint: Pubkey (32)  <-- the one we want
+            var mintBytes = br.ReadBytes(32);
+            if (mintBytes.Length != 32)
+                throw new Exception("Failed to read collateral_mint pubkey.");
+
+            return new PublicKey(mintBytes);
+        }
+
 
     }
 }

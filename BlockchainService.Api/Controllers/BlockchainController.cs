@@ -26,8 +26,7 @@ public class BlockchainController : ControllerBase
             request.Question,
             request.EndTime.ToUniversalTime(),
             request.InitialLiquidity,
-            request.CollateralMint,
-            request.AuthorityCollateralAta
+            request.CollateralMint
         );
 
         var response = new CreateMarketResponse(
@@ -60,7 +59,6 @@ public class BlockchainController : ControllerBase
     {
         var result = await _client.BuySharesAsync(
             marketPubkey,
-            request.UserCollateralAta,
             request.MaxCollateralIn,
             request.MinSharesOut,
             request.OutcomeIndex,
@@ -88,7 +86,6 @@ public class BlockchainController : ControllerBase
     {
         var result = await _client.SellSharesAsync(
             marketPubkey,
-            request.UserCollateralAta,
             request.SharesIn,
             request.MinCollateralOut,
             request.OutcomeIndex,
@@ -119,7 +116,6 @@ public class BlockchainController : ControllerBase
         // We only need the token accounts from the caller.
         var txSig = await _client.ClaimWinningsAsync(
             marketPubkey: marketPubkey,
-            userCollateralAta: request.UserCollateralAta,
             ct: ct
         );
 
