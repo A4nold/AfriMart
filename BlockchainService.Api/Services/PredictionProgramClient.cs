@@ -15,7 +15,9 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System;
 using System.Threading.Tasks;
+using BlockchainService.Api.Exceptions;
 
 namespace BlockchainService.Api.Services
 {
@@ -70,11 +72,42 @@ namespace BlockchainService.Api.Services
                 _ => Commitment.Confirmed
             };
         
+        private static (string? code, int? number) TryParseAnchorError(string message)
+        {
+            // message contains: "Error Code: InvalidMarketStatus. Error Number: 6001."
+            string? code = null;
+            int? number = null;
+
+            var codeMarker = "Error Code:";
+            var numMarker = "Error Number:";
+
+            var codeIdx = message.IndexOf(codeMarker, StringComparison.OrdinalIgnoreCase);
+            if (codeIdx >= 0)
+            {
+                var after = message[(codeIdx + codeMarker.Length)..].TrimStart();
+                var end = after.IndexOf('.', StringComparison.Ordinal);
+                if (end > 0) code = after[..end].Trim();
+            }
+
+            var numIdx = message.IndexOf(numMarker, StringComparison.OrdinalIgnoreCase);
+            if (numIdx >= 0)
+            {
+                var after = message[(numIdx + numMarker.Length)..].TrimStart();
+                var end = after.IndexOf('.', StringComparison.Ordinal);
+                if (end > 0 && int.TryParse(after[..end].Trim(), out var n)) number = n;
+            }
+
+            return (code, number);
+        }
+
+        
         private async Task<string> SendAndConfirmAsync(byte[] tx, Commitment commitment, bool skipPreflight, CancellationToken ct = default)
         {
             var send = await _rpc.SendTransactionAsync(tx, skipPreflight: skipPreflight, commitment: commitment);
-            if (!send.WasSuccessful)
-                throw new Exception($"SendTransaction failed: {send.Reason}");
+            var msg = $"SendTransaction failed: {send.Reason}";
+            var (anchorCode, anchorNumber) = TryParseAnchorError(msg);
+            throw new AnchorProgramException(msg, anchorCode, anchorNumber);
+
         
             var sig = send.Result;
             
@@ -144,6 +177,12 @@ namespace BlockchainService.Api.Services
             };
             if (!PublicKey.TryFindProgramAddress(marketSeeds, _programId, out var marketPk, out _))
                 throw new Exception("Failed to derive market PDA.");
+            
+            var existing = await _rpc.GetAccountInfoAsync(marketPk, commitment: Commitment.Confirmed);
+            if (existing.WasSuccessful && existing.Result?.Value != null)
+            {
+                throw new Exception($"Market already exists for marketId={marketId}. Market PDA: {marketPk.Key}");
+            }
 
             // vault PDA: ["vault_v2", market]
             byte[][] vaultSeeds =
