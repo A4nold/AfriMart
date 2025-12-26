@@ -8,9 +8,8 @@ namespace MarketService.Domain.Entities
 {
     public enum ResolutionSource
     {
-        Unknown = 0,
-        ManualAdmin = 1,
-        ExternalApi = 2,
-        Oracle = 3
+        ManualAdmin = 0,
+        ExternalApi = 1,
+        Oracle = 2
     }
 }

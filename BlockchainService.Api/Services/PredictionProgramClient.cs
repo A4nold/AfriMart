@@ -104,9 +104,12 @@ namespace BlockchainService.Api.Services
         private async Task<string> SendAndConfirmAsync(byte[] tx, Commitment commitment, bool skipPreflight, CancellationToken ct = default)
         {
             var send = await _rpc.SendTransactionAsync(tx, skipPreflight: skipPreflight, commitment: commitment);
-            var msg = $"SendTransaction failed: {send.Reason}";
-            var (anchorCode, anchorNumber) = TryParseAnchorError(msg);
-            throw new AnchorProgramException(msg, anchorCode, anchorNumber);
+            if (!send.WasSuccessful || string.IsNullOrWhiteSpace(send.Result))
+            {
+                var msg = $"SendTransaction failed: {send.Reason}";
+                var (anchorCode, anchorNumber) = TryParseAnchorError(msg);
+                throw new AnchorProgramException(msg, anchorCode, anchorNumber);
+            }
 
         
             var sig = send.Result;

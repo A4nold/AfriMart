@@ -1,125 +1,184 @@
-﻿using MarketService.Domain.Commands;
-using MarketService.Domain.Entities;
-using MarketService.Domain.Interfaces;
-using MarketService.Domain.Models;
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System.Security.Claims;
+using MarketService.Application.Commands;
+using MarketService.Application.Exception;
+using MarketService.Application.Interfaces;
+using MarketService.Domain.Commands;
+using CreateMarketCommand = MarketService.Application.Commands.CreateMarketCommand;
+using ValidationException = System.ComponentModel.DataAnnotations.ValidationException;
 
 namespace MarketService.Api.Controllers;
 
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/markets")]
 public class MarketsController : ControllerBase
 {
-    private readonly IMarketService _marketService;
-    private readonly IPositionService _positionService;
+    private readonly IMarketApplication _app;
 
-    public MarketsController(IMarketService marketService, IPositionService positionService)
+    public MarketsController(IMarketApplication app) => _app = app;
+
+    private string GetIdempotencyKeyOrThrow()
     {
-        _marketService = marketService;
-        _positionService = positionService;
+        if (Request.Headers.TryGetValue("Idempotency-Key", out var v) && !string.IsNullOrWhiteSpace(v))
+            return v.ToString();
+
+        // You can choose to generate, but then client must reuse it.
+        // For now: require it.
+        throw new ValidationException("Missing Idempotency-Key header.");
     }
 
-    //Helper
-    private Guid GetUserId() 
-    {
-        var sub = User.FindFirstValue(ClaimTypes.NameIdentifier)
-                       ?? User.FindFirstValue("sub");
-        return Guid.Parse(sub);
-    }
-
-    public sealed class ClaimWinningsRequest
-    {
-        public string BettorTokenAccount { get; set; } = default!;
-        public string VaultTokenAccount { get; set; } = default!;   
-    }
-
-    [HttpGet]
-    [AllowAnonymous]
-    public async Task<ActionResult<IEnumerable<MarketDto>>> GetMarkets(CancellationToken ct)
-    {
-        var markets = await _marketService.GetAllMarketsAsync(ct);
-        return Ok(markets);
-    }
-
-    [HttpGet("{id:guid}")]
-    [AllowAnonymous]
-    public async Task<ActionResult<MarketDto>> GetMarket(Guid id, CancellationToken ct)
-    {
-        var market = await _marketService.GetMarketByIdAsync(id, ct);
-        if (market == null) return NotFound();
-        return Ok(market);
-    }
-
-    [HttpPost]
+    // ---- Create ----
     [Authorize(Roles = "Admin")]
-    public async Task<ActionResult<MarketDto>> CreateMarket(
-        [FromBody] CreateMarketCommand command,
-        CancellationToken ct)
+    [HttpPost("create")]
+    public async Task<IActionResult> Create([FromBody] CreateMarketApiRequest req, CancellationToken ct)
     {
-        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier)
-                       ?? User.FindFirstValue("sub");
+        try
+        {
+            var cmd = new CreateMarketCommand(
+                CreatorUserId: req.CreatorUserId,
+                MarketSeedId: req.MarketId,
+                Question: req.Question,
+                EndTimeUtc: req.EndTime.ToUniversalTime(),
+                InitialLiquidity: req.InitialLiquidity,
+                CollateralMint: req.CollateralMint,
+                IdempotencyKey: GetIdempotencyKeyOrThrow()
+            );
 
-        if (!Guid.TryParse(userIdStr, out var userId))
-            return Unauthorized();
-
-        var market = await _marketService.CreateMarketAsync(command, userId, ct);
-        return CreatedAtAction(nameof(GetMarket), new { id = market.Id }, market);
+            var result = await _app.CreateMarketAsync(cmd, ct);
+            return Ok(new { result.MarketId, result.MarketPubKey, result.TxSignature });
+        }
+        catch (Exception ex) { return MapException(ex); }
     }
 
-    [HttpPost("{marketId:guid}/bet")]
-    [Authorize]
-    public async Task<ActionResult<PositionDto>> PlaceBet(
-        Guid marketId, [FromBody] PlaceBetCommand command,
-        CancellationToken ct)
-    {
-        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier ?? User.FindFirstValue("sub"));
-
-        if(!Guid.TryParse(userIdStr, out var userId))
-                return Unauthorized();
-
-        var position = await _positionService.PlaceBetAsync(marketId, userId, command, ct);
-        return Ok(position);
-    }
-
-    [HttpPost("{marketId:guid}/resolve")]
+    // ---- Resolve ----
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> ResolveMarket(Guid marketId, 
-        [FromBody] byte winningOutcomeIndex, 
-        CancellationToken ct)
+    [HttpPost("{marketPubkey}/resolve")]
+    public async Task<IActionResult> Resolve([FromRoute] string marketPubkey, [FromBody] ResolveMarketApiRequest req, CancellationToken ct)
     {
-        var userId = GetUserId();
-
-        var command = new ResolveMarketCommand
+        try
         {
-            MarketId = marketId,
-            WinningOutcomeIndex = winningOutcomeIndex,
-            ResolverUserId = userId
-        };
+            var cmd = new ResolveMarketCommand(
+                ResolverUserId: req.ResolverUserId,
+                MarketPubKey: marketPubkey,
+                WinningOutcomeIndex: req.WinningOutcomeIndex,
+                IdempotencyKey: GetIdempotencyKeyOrThrow()
+            );
 
-        var resolution = await _marketService.ResolveMarketAsync(command, ct);
-
-        return CreatedAtAction(nameof(ResolveMarket), new { id = resolution.Id }, resolution);
+            var result = await _app.ResolveMarketAsync(cmd, ct);
+            return Ok(new { result.MarketId, result.MarketPubKey, result.WinningOutcomeIndex, result.TxSignature });
+        }
+        catch (Exception ex) { return MapException(ex); }
     }
 
-    [HttpPost("{marketId:guid}/claim")]
+    // ---- Buy ----
     [Authorize]
-    public async Task<IActionResult> ClaimWinnings (Guid marketId, [FromBody] ClaimWinningsRequest request,
-        CancellationToken ct)
+    [HttpPost("{marketPubkey}/buy")]
+    public async Task<IActionResult> Buy([FromRoute] string marketPubkey, [FromBody] BuySharesApiRequest req, CancellationToken ct)
     {
-        var userId = GetUserId();
-
-        var command = new ClaimWinningsCommand
+        try
         {
-            MarketId = marketId,
-            UserId = userId,
-            BettorTokenAccount = request.BettorTokenAccount,
-            VaultTokenAccount = request.VaultTokenAccount
+            var cmd = new BuySharesCommand(
+                UserId: req.UserId,
+                MarketPubKey: marketPubkey,
+                MaxCollateralIn: req.MaxCollateralIn,
+                MinSharesOut: req.MinSharesOut,
+                OutcomeIndex: req.OutcomeIndex,
+                IdempotencyKey: GetIdempotencyKeyOrThrow()
+            );
+
+            var result = await _app.BuySharesAsync(cmd, ct);
+            return Ok(result);
+        }
+        catch (Exception ex) { return MapException(ex); }
+    }
+
+    // ---- Sell ----
+    [Authorize]
+    [HttpPost("{marketPubkey}/sell")]
+    public async Task<IActionResult> Sell([FromRoute] string marketPubkey, [FromBody] SellSharesApiRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var cmd = new SellSharesCommand(
+                UserId: req.UserId,
+                MarketPubKey: marketPubkey,
+                SharesIn: req.SharesIn,
+                MinCollateralOut: req.MinCollateralOut,
+                OutcomeIndex: req.OutcomeIndex,
+                IdempotencyKey: GetIdempotencyKeyOrThrow()
+            );
+
+            var result = await _app.SellSharesAsync(cmd, ct);
+            return Ok(result);
+        }
+        catch (Exception ex) { return MapException(ex); }
+    }
+
+    // ---- Claim ----
+    [Authorize]
+    [HttpPost("{marketPubkey}/claim")]
+    public async Task<IActionResult> Claim([FromRoute] string marketPubkey, [FromBody] ClaimWinningsApiRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var cmd = new ClaimWinningsCommand(
+                UserId: req.UserId,
+                MarketPubKey: marketPubkey,
+                IdempotencyKey: GetIdempotencyKeyOrThrow()
+            );
+
+            var result = await _app.ClaimWinningsAsync(cmd, ct);
+            return Ok(result);
+        }
+        catch (Exception ex) { return MapException(ex); }
+    }
+
+    // -------------------------------
+    // Exception -> HTTP mapping
+    // -------------------------------
+    private IActionResult MapException(Exception ex)
+    {
+        return ex switch
+        {
+            ValidationException ve => BadRequest(new ProblemDetails { Title = "Validation error", Detail = ve.Message, Status = 400 }),
+            NotFoundException nfe => NotFound(new ProblemDetails { Title = "Not found", Detail = nfe.Message, Status = 404 }),
+            ConflictException ce => Conflict(new ProblemDetails { Title = "Conflict", Detail = ce.Message, Status = 409 }),
+
+            AnchorProgramException ape => BadRequest(new ProblemDetails
+            {
+                Title = "On-chain program error",
+                Detail = ape.Message,
+                Status = 400,
+                Extensions =
+                {
+                    ["anchorCode"] = ape.AnchorCode,
+                    ["anchorNumber"] = ape.AnchorNumber
+                }
+            }),
+
+            ExternalDependencyException ede => StatusCode(503, new ProblemDetails { Title = "Blockchain dependency failed", Detail = ede.Message, Status = 503 }),
+
+            _ => StatusCode(500, new ProblemDetails { Title = "Server error", Detail = ex.Message, Status = 500 })
         };
-
-        await _marketService.ClaimWinningsAsync(command, ct);
-
-        return NoContent();
     }
 }
+
+// -------------------------------
+// API request DTOs
+// -------------------------------
+public sealed record CreateMarketApiRequest(
+    Guid CreatorUserId,
+    ulong MarketId,
+    string Question,
+    DateTime EndTime,
+    ulong InitialLiquidity,
+    string CollateralMint
+);
+
+public sealed record ResolveMarketApiRequest(Guid ResolverUserId, byte WinningOutcomeIndex);
+
+public sealed record BuySharesApiRequest(Guid UserId, ulong MaxCollateralIn, ulong MinSharesOut, byte OutcomeIndex);
+
+public sealed record SellSharesApiRequest(Guid UserId, ulong SharesIn, ulong MinCollateralOut, byte OutcomeIndex);
+
+public sealed record ClaimWinningsApiRequest(Guid UserId);

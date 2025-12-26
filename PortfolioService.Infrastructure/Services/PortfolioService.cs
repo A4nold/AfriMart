@@ -35,14 +35,14 @@ public class PortfolioService : IPortfolioService
         foreach (var p in positions)
         {
             var market = p.Market;
-            var winningIndex = market.WinningOutcomeIndex; // assume byte? type
-            var isResolved = market.Status == MarketStatus.Resolved;
+            // var winningIndex = market.WinningOutcomeIndex; // assume byte? type
+            // var isResolved = market.Status == MarketStatus.Resolved;
             bool? won = null;
 
-            if (isResolved && winningIndex.HasValue)
-            {
-                won = (byte)p.OutcomeIndex == winningIndex.Value;
-            }
+            // if (isResolved && winningIndex.HasValue)
+            // {
+            //     won = (byte)p.OutcomeIndex == winningIndex.Value;
+            // }
 
             var outcomeLabel = market.Outcomes
                 .FirstOrDefault(o => o.OutcomeIndex == p.OutcomeIndex)?.Label ?? "";
@@ -52,8 +52,8 @@ public class PortfolioService : IPortfolioService
                 PositionId = p.Id,
                 MarketId = p.MarketId,
                 MarketQuestion = market.Question,
-                MarketStatus = market.Status.ToString(),
-                MarketEndTime = market.EndTime,
+                // MarketStatus = market.Status.ToString(),
+                // MarketEndTime = market.EndTime,
 
                 OutcomeIndex = p.OutcomeIndex,
                 OutcomeLabel = outcomeLabel,
@@ -68,14 +68,14 @@ public class PortfolioService : IPortfolioService
                 ClaimedAt = p.ClaimedAt
             };
 
-            if (!isResolved)
-            {
-                overview.OpenPositions.Add(dto);
-            }
-            else
-            {
-                overview.ResolvedPositions.Add(dto);
-            }
+            // if (!isResolved)
+            // {
+            //     overview.OpenPositions.Add(dto);
+            // }
+            // else
+            // {
+            //     overview.ResolvedPositions.Add(dto);
+            // }
         }
 
         // Claimable = resolved, not claimed, won == true

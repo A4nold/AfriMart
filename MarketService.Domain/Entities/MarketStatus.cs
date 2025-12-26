@@ -6,12 +6,28 @@ using System.Threading.Tasks;
 
 namespace MarketService.Domain.Entities
 {
-    public enum MarketStatus
+    public enum MarketStatus:byte
     {
         Open = 0,
-        Locked = 1,
-        Resolved = 2,
-        Settled = 3,
-        Cancelled = 4
+        Resolved = 1,
+        Cancelled = 2
     }
+
+    public enum MarketActionType:byte
+    {
+        Create = 0,
+        Buy = 1,
+        Sell = 2,
+        Resolve = 3,
+        Claim = 4
+    }
+
+    public enum ActionState : byte
+    {
+        Pending = 0,
+        Submitted = 1,
+        Confirmed = 2,
+        Failed = 3
+    }
+    
 }

@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\MarketService.Application\MarketService.Application.csproj" />
     <ProjectReference Include="..\MarketService.Domain\MarketService.Domain.csproj" />
     <ProjectReference Include="..\MarketService.Infrastructure\MarketService.Infrastructure.csproj" />
   </ItemGroup>

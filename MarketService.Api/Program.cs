@@ -1,6 +1,6 @@
 using MarketService.Domain.Interfaces;
 using MarketService.Infrastructure.Data;
-using MarketService.Infrastructure.Services;
+//using MarketService.Infrastructure.Services;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -30,8 +30,8 @@ Console.WriteLine($"[Startup] JWT AUDIENCE : {jwtAudience}");
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey!));
 
 // Register domain interfaces to infrastructure implementations
-builder.Services.AddScoped<IMarketService, MarketService.Infrastructure.Services.MarketService>();
-builder.Services.AddScoped<IPositionService, PositionService>();
+//builder.Services.AddScoped<IMarketService, MarketService.Infrastructure.Services.MarketService>();
+//builder.Services.AddScoped<IPositionService, PositionService>();
 
 
 builder.Services

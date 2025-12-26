@@ -15,6 +15,10 @@ namespace MarketService.Domain.Entities
 
         public int WinningOutcomeIndex { get; set; }
         public ResolutionSource Source { get; set; }
+        
+        public Guid ResolvedByUserId { get; set; }
+        public string ResolveTxSignature { get; set; } = default!;
+        
         public string? EvidenceUrl { get; set; }      // optional: link to API / news / tx
         public string? Notes { get; set; }
 
