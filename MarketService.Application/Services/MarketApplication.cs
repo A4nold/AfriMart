@@ -1,4 +1,5 @@
 using MarketService.Application.Commands;
+using MarketService.Application.Dtos;
 using MarketService.Application.Exception;
 using MarketService.Application.Helper;
 using MarketService.Application.Interfaces;
@@ -43,31 +44,83 @@ public sealed class MarketApplication : IMarketApplication
         if (cmd.EndTimeUtc <= _clock.UtcNow) throw new ValidationException("EndTimeUtc must be in the future.");
         if (string.IsNullOrWhiteSpace(cmd.CollateralMint)) throw new ValidationException("CollateralMint is required.");
 
-        // Natural idempotency for create (seed + authority)
-        var existing = await _markets.FindByAuthorityAndSeedAsync(_chain.AuthorityPubKey, cmd.MarketSeedId, ct);
+        // ✅ 0) Claim idempotency key FIRST (before inserting Market row)
+        var action = await _actions.GetOrCreateAsync(new MarketAction
+        {
+            Id = Guid.NewGuid(),
+            MarketId = Guid.Empty, // temporary until we create/find market
+            RequestedByUserId = cmd.CreatorUserId,
+            ActionType = MarketActionType.Create,
+            State = ActionState.Pending,
+            IdempotencyKey = cmd.IdempotencyKey,
+            RequestJson = JsonX.ToJson(new CreateMarketIdemPayload(cmd.MarketSeedId)), // we’ll set below
+            CreatedAtUtc = _clock.UtcNow,
+            AttemptCount = 0
+        }, ct);
+
+        // ✅ 1) Determine stable seed (replay-safe)
+        ulong seed;
+        if (!string.IsNullOrWhiteSpace(action.RequestJson))
+        {
+            // Replay: reuse seed from first request
+            seed = JsonX.FromJson<CreateMarketIdemPayload>(action.RequestJson).MarketSeedId;
+        }
+        else
+        {
+            // First request: "lock" the seed into the action row
+            seed = cmd.MarketSeedId;
+            action.RequestJson = JsonX.ToJson(new CreateMarketIdemPayload(seed));
+            action.UpdatedAtUtc = _clock.UtcNow;
+            await _uow.SaveChangesAsync(ct);
+        }
+
+        // ✅ 2) Natural idempotency for create (seed + authority)
+        var existing = await _markets.FindByAuthorityAndSeedAsync(_chain.AuthorityPubKey, seed, ct);
         if (existing is not null)
         {
-            // if we have a confirmed creation action, return it; else return market anyway
-            var act = await _actions.GetLatestForMarketAsync(existing.Id, MarketActionType.Create, ct);
-            if (act?.State == ActionState.Confirmed && act.TxSignature != null)
-                return new CreateMarketResult(existing.Id, existing.MarketPubKey, act.TxSignature);
+            // backfill action.MarketId if needed
+            if (action.MarketId == Guid.Empty)
+            {
+                action.MarketId = existing.Id;
+                action.UpdatedAtUtc = _clock.UtcNow;
+                await _uow.SaveChangesAsync(ct);
+            }
+
+            // If already confirmed, return tx signature
+            if (action.State == ActionState.Confirmed && action.TxSignature != null)
+                return new CreateMarketResult(existing.Id, existing.MarketPubKey, action.TxSignature);
 
             return new CreateMarketResult(existing.Id, existing.MarketPubKey, existing.CreatedAtUtc.ToString("O"));
         }
 
-        // Create market row BEFORE chain call (so we can attach actions)
+        // ✅ 3) Derive PDAs up-front using the stable seed
+        var pdas = _chain.DeriveMarketPdas(seed);
+
+        // Create market row BEFORE chain call
         var market = new Domain.Entities.Market
         {
             Id = Guid.NewGuid(),
-            MarketPubKey = "", // will fill after chain call
+
+            MarketSeedId = seed,
+            AuthorityPubKey = _chain.AuthorityPubKey,
+            ProgramId = _chain.ProgramId,
+            CollateralMint = cmd.CollateralMint,
+
+            MarketPubKey = pdas.MarketPubKey,
+            VaultPubKey = pdas.VaultPubKey,
+            VaultAuthorityPubKey = pdas.VaultAuthorityPubKey,
+
             Question = cmd.Question,
             EndTimeUtc = cmd.EndTimeUtc,
             Status = Domain.Entities.MarketStatus.Open,
             CreatorUserId = cmd.CreatorUserId,
             CreatedAtUtc = _clock.UtcNow,
+            CreatedTxSignature = "",
+
             WinningOutcomeIndex = null,
             ResolvedAtUtc = null,
             SettledAtUtc = null,
+
             Outcomes = new List<Domain.Entities.MarketOutcome>
             {
                 new() { OutcomeIndex = 0, Label = "YES" },
@@ -75,15 +128,20 @@ public sealed class MarketApplication : IMarketApplication
             }
         };
         
-        market.MarketSeedId = cmd.MarketSeedId;
-        market.AuthorityPubKey = _chain.AuthorityPubKey;
-        market.ProgramId = _chain.ProgramId;
-        market.CollateralMint = cmd.CollateralMint;
+        Console.WriteLine($"[CreateMarket] Idem={cmd.IdempotencyKey} Seed={seed} MarketPda={market.MarketPubKey}");
 
         await _markets.AddAsync(market, ct);
+
+        // ✅ 4) attach action to this market
+        if (action.MarketId == Guid.Empty)
+        {
+            action.MarketId = market.Id;
+            action.UpdatedAtUtc = _clock.UtcNow;
+        }
+
         await _uow.SaveChangesAsync(ct);
 
-        // Execute create action idempotently
+        // ✅ 5) Execute create action idempotently
         return await _exec.ExecuteAsync(
             marketId: market.Id,
             userId: cmd.CreatorUserId,
@@ -93,23 +151,27 @@ public sealed class MarketApplication : IMarketApplication
             chainCall: async (innerCt) =>
             {
                 var res = await _chain.CreateMarketAsync(new BlockchainCreateMarketRequest(
-                    MarketId: cmd.MarketSeedId,
+                    MarketId: seed, // ✅ use stable seed
                     Question: cmd.Question,
                     EndTimeUtc: cmd.EndTimeUtc,
                     InitialLiquidity: cmd.InitialLiquidity,
                     CollateralMint: cmd.CollateralMint
                 ), innerCt);
 
-                // persist market pubkey now that we have it
-                market.MarketPubKey = res.MarketPubkey;
+                // ✅ sanity check returned pubkey matches derived PDA
+                if (!string.Equals(res.MarketPubkey, market.MarketPubKey, StringComparison.Ordinal))
+                    throw new ExternalDependencyException(
+                        $"Derived MarketPubKey mismatch. Derived={market.MarketPubKey}, Chain={res.MarketPubkey}");
+
+                market.CreatedTxSignature = res.TransactionSignature;
                 await _uow.SaveChangesAsync(innerCt);
 
-                var result = new CreateMarketResult(market.Id, res.MarketPubkey, res.TransactionSignature);
+                var result = new CreateMarketResult(market.Id, market.MarketPubKey, res.TransactionSignature);
                 return (res.TransactionSignature, result);
             },
             ct);
     }
-
+    
     public async Task<ResolveMarketResult> ResolveMarketAsync(ResolveMarketCommand cmd, CancellationToken ct)
     {
         var market = await _markets.GetByPubKeyAsync(cmd.MarketPubKey, ct)
@@ -289,7 +351,7 @@ public sealed class MarketApplication : IMarketApplication
                     // If we can’t find it, surface a clear error (rare: e.g. claimed outside your system)
                     throw new ConflictException("Winnings are already claimed, but no previous claim transaction was found.");
                 }
-            },
+            }, 
             ct);
     }
 

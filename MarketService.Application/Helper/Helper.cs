@@ -3,6 +3,8 @@ using System.Text.Json.Serialization;
 using MarketService.Application.Exception;
 using MarketService.Domain.Entities;
 using MarketService.Domain.Interface;
+using Solnet.KeyStore;
+using Solnet.Wallet;
 
 namespace MarketService.Application.Helper;
 

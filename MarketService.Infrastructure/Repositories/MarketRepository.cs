@@ -18,7 +18,7 @@ public class MarketRepository : IMarketRepository
         => _db.Set<Market>()
             .FirstOrDefaultAsync(x => x.MarketPubKey == marketPubKey, ct);
 
-    public Task<Market?> FindByAuthorityAndSeedAsync(string authorityPubKey, ulong marketSeedId, CancellationToken ct)
+    public Task<Market?> FindByAuthorityAndSeedAsync(string authorityPubKey, ulong? marketSeedId, CancellationToken ct)
         => _db.Set<Market>()
             .FirstOrDefaultAsync(x => x.AuthorityPubKey == authorityPubKey && x.MarketSeedId == marketSeedId, ct);
 

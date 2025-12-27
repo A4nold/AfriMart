@@ -1,9 +1,9 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System.Security.Cryptography;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MarketService.Application.Commands;
 using MarketService.Application.Exception;
 using MarketService.Application.Interfaces;
-using MarketService.Domain.Commands;
 using CreateMarketCommand = MarketService.Application.Commands.CreateMarketCommand;
 using ValidationException = System.ComponentModel.DataAnnotations.ValidationException;
 
@@ -14,17 +14,38 @@ namespace MarketService.Api.Controllers;
 public class MarketsController : ControllerBase
 {
     private readonly IMarketApplication _app;
+    private readonly IWebHostEnvironment _env;
 
-    public MarketsController(IMarketApplication app) => _app = app;
+    public MarketsController(IMarketApplication app, IWebHostEnvironment env)
+    {
+        _app = app;
+        _env = env;
+    }
 
     private string GetIdempotencyKeyOrThrow()
     {
         if (Request.Headers.TryGetValue("Idempotency-Key", out var v) && !string.IsNullOrWhiteSpace(v))
             return v.ToString();
 
-        // You can choose to generate, but then client must reuse it.
-        // For now: require it.
+        if (_env.IsDevelopment())
+        {
+            var generated = Guid.NewGuid().ToString();
+            Console.WriteLine($"[DEV] Generated Idempotency-Key: {generated}");
+            return generated;
+        }
+        
         throw new ValidationException("Missing Idempotency-Key header.");
+    }
+
+    public static ulong GetMarketU64Seeds()
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        RandomNumberGenerator.Fill(bytes);
+
+        if (!BitConverter.IsLittleEndian)
+            bytes.Reverse();
+
+        return BitConverter.ToUInt64(bytes);
     }
 
     // ---- Create ----
@@ -36,7 +57,7 @@ public class MarketsController : ControllerBase
         {
             var cmd = new CreateMarketCommand(
                 CreatorUserId: req.CreatorUserId,
-                MarketSeedId: req.MarketId,
+                MarketSeedId: GetMarketU64Seeds(),
                 Question: req.Question,
                 EndTimeUtc: req.EndTime.ToUniversalTime(),
                 InitialLiquidity: req.InitialLiquidity,
@@ -45,7 +66,7 @@ public class MarketsController : ControllerBase
             );
 
             var result = await _app.CreateMarketAsync(cmd, ct);
-            return Ok(new { result.MarketId, result.MarketPubKey, result.TxSignature });
+            return Ok(new { result.MarketId, result.MarketPubKey,MarketSeedId = cmd.MarketSeedId, result.TxSignature });
         }
         catch (Exception ex) { return MapException(ex); }
     }

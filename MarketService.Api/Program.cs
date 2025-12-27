@@ -1,9 +1,16 @@
-using MarketService.Domain.Interfaces;
+using System.Net;
 using MarketService.Infrastructure.Data;
 //using MarketService.Infrastructure.Services;
 using System.Text;
+using MarketService.Application.Gateways;
+using MarketService.Application.Helper;
+using MarketService.Application.Interfaces;
+using MarketService.Application.Services;
+using MarketService.Domain.Interface;
+using MarketService.Infrastructure.Repositories;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -23,7 +30,7 @@ var jwtKey = jwtSection.GetValue<string>("Key")!;
 var jwtIssuer = jwtSection.GetValue<string>("Issuer");
 var jwtAudience = jwtSection.GetValue<string>("Audience");
 
-Console.WriteLine($"[Startup] JWT KEY : {jwtKey}");
+Console.WriteLine($"[Startup] JWT KEY : ");
 Console.WriteLine($"[Startup] JWT ISSUER : {jwtIssuer}");
 Console.WriteLine($"[Startup] JWT AUDIENCE : {jwtAudience}");
 
@@ -32,6 +39,13 @@ var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey!));
 // Register domain interfaces to infrastructure implementations
 //builder.Services.AddScoped<IMarketService, MarketService.Infrastructure.Services.MarketService>();
 //builder.Services.AddScoped<IPositionService, PositionService>();
+builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddScoped<MarketActionExecutor>(); // or IMarketActionExecutor
+builder.Services.AddScoped<IMarketRepository, MarketRepository>();
+builder.Services.AddScoped<IMarketActionRepository, MarketActionRepository>();
+builder.Services.AddScoped<IUserPositionRepository, UserPositionRepository>();
+builder.Services.AddScoped<IMarketApplication, MarketApplication>();
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 
 builder.Services
@@ -53,7 +67,8 @@ builder.Services
         {
             OnMessageReceived = context =>
             {
-                Console.WriteLine($"JWT Raw Authorization token: '{context.Token}'");
+                var auth = context.Request.Headers.Authorization.ToString();
+                Console.WriteLine($"Authorization header: '{auth}'");
                 return Task.CompletedTask;
             },
             OnAuthenticationFailed = context =>
@@ -71,17 +86,25 @@ builder.Services
         };
     });
 
+builder.Host.UseDefaultServiceProvider(options =>
+{
+    options.ValidateScopes = true;
+    options.ValidateOnBuild = true;
+});
+
+builder.Services.Configure<BlockchainGatewayOptions>(
+    builder.Configuration.GetSection("BlockchainGateway"));
+
 builder.Services.AddAuthorization();
 
-// HttpClient to call BlockchainService later
-builder.Services.AddHttpClient("BlockchainService", client =>
+// HttpClient to call BlockchainService
+builder.Services.AddHttpClient<IBlockchainGateway, BlockchainGatewayHttp>((sp, client) =>
 {
-    var baseUrl = builder.Configuration["BlockchainService:BaseUrl"];
-    if (!string.IsNullOrEmpty(baseUrl))
-    {
-        client.BaseAddress = new Uri(baseUrl);
-    }
+    var opts = sp.GetRequiredService<IOptions<BlockchainGatewayOptions>>().Value;
+    client.BaseAddress = new Uri(opts.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(120);
 });
+
 builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddControllers();
