@@ -6,6 +6,7 @@ Resolution logic is intentionally separated from core market mechanics, allowing
 
 📄 **Detailed design and rationale:**  
 [Oracle Resolution Architecture](./docs/architecture/Oracle_Resolution_Architecture.pdf)
+*Planned to build, manual resolution with authority key as a signer for now.
 
 AfriMart prioritizes transparency, dispute-resistance, and extensibility in market resolution.  
 All resolutions ultimately finalize on-chain, with clear audit trails and deterministic outcomes.
