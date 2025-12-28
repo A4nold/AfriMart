@@ -7,6 +7,7 @@ using MarketService.Application.Requests;
 using MarketService.Domain.Commands;
 using MarketService.Domain.Entities;
 using MarketService.Domain.Interface;
+using Microsoft.Extensions.Options;
 using CreateMarketCommand = MarketService.Application.Commands.CreateMarketCommand;
 
 namespace MarketService.Application.Services;
@@ -20,6 +21,7 @@ public sealed class MarketApplication : IMarketApplication
     private readonly IUnitOfWork _uow;
     private readonly IClock _clock;
     private readonly MarketActionExecutor _exec;
+    private readonly SolanaOptions _cfg;
 
     public MarketApplication(
         IMarketRepository markets,
@@ -27,8 +29,10 @@ public sealed class MarketApplication : IMarketApplication
         IMarketActionRepository actions,
         IBlockchainGateway chain,
         IUnitOfWork uow,
-        IClock clock)
+        IClock clock,
+        IOptions<SolanaOptions> options)
     {
+        var cfg = options.Value;
         _markets = markets;
         _positions = positions;
         _actions = actions;
@@ -36,19 +40,31 @@ public sealed class MarketApplication : IMarketApplication
         _uow = uow;
         _clock = clock;
         _exec = new MarketActionExecutor(actions, uow, clock);
+        _cfg = cfg;
     }
+    
+    private void PopulateMarketPdas(Domain.Entities.Market market)
+    {
+        // uses programId + authorityPubKey from gateway options
+        var pdas = _chain.DeriveMarketPdas(market.MarketSeedId);
+
+        market.MarketPubKey = pdas.MarketPubKey;
+        market.VaultPubKey = pdas.VaultPubKey;
+        market.VaultAuthorityPubKey = pdas.VaultAuthorityPubKey;
+    }
+
 
     public async Task<CreateMarketResult> CreateMarketAsync(CreateMarketCommand cmd, CancellationToken ct)
     {
         if (cmd.InitialLiquidity == 0) throw new ValidationException("InitialLiquidity must be > 0.");
         if (cmd.EndTimeUtc <= _clock.UtcNow) throw new ValidationException("EndTimeUtc must be in the future.");
-        if (string.IsNullOrWhiteSpace(cmd.CollateralMint)) throw new ValidationException("CollateralMint is required.");
+        if (string.IsNullOrWhiteSpace(_cfg.FUSD)) throw new ValidationException("CollateralMint is required.");
 
         // ✅ 0) Claim idempotency key FIRST (before inserting Market row)
         var action = await _actions.GetOrCreateAsync(new MarketAction
         {
             Id = Guid.NewGuid(),
-            MarketId = Guid.Empty, // temporary until we create/find market
+            MarketId = null, // temporary until we create/find market
             RequestedByUserId = cmd.CreatorUserId,
             ActionType = MarketActionType.Create,
             State = ActionState.Pending,
@@ -88,9 +104,9 @@ public sealed class MarketApplication : IMarketApplication
 
             // If already confirmed, return tx signature
             if (action.State == ActionState.Confirmed && action.TxSignature != null)
-                return new CreateMarketResult(existing.Id, existing.MarketPubKey, action.TxSignature);
+                return new CreateMarketResult(existing.Id, existing.MarketPubKey,existing.MarketSeedId, action.TxSignature);
 
-            return new CreateMarketResult(existing.Id, existing.MarketPubKey, existing.CreatedAtUtc.ToString("O"));
+            return new CreateMarketResult(existing.Id, existing.MarketPubKey, existing.MarketSeedId,existing.CreatedAtUtc.ToString("O"));
         }
 
         // ✅ 3) Derive PDAs up-front using the stable seed
@@ -104,7 +120,7 @@ public sealed class MarketApplication : IMarketApplication
             MarketSeedId = seed,
             AuthorityPubKey = _chain.AuthorityPubKey,
             ProgramId = _chain.ProgramId,
-            CollateralMint = cmd.CollateralMint,
+            CollateralMint = _cfg.FUSD,
 
             MarketPubKey = pdas.MarketPubKey,
             VaultPubKey = pdas.VaultPubKey,
@@ -155,7 +171,7 @@ public sealed class MarketApplication : IMarketApplication
                     Question: cmd.Question,
                     EndTimeUtc: cmd.EndTimeUtc,
                     InitialLiquidity: cmd.InitialLiquidity,
-                    CollateralMint: cmd.CollateralMint
+                    CollateralMint: _cfg.FUSD
                 ), innerCt);
 
                 // ✅ sanity check returned pubkey matches derived PDA
@@ -166,7 +182,7 @@ public sealed class MarketApplication : IMarketApplication
                 market.CreatedTxSignature = res.TransactionSignature;
                 await _uow.SaveChangesAsync(innerCt);
 
-                var result = new CreateMarketResult(market.Id, market.MarketPubKey, res.TransactionSignature);
+                var result = new CreateMarketResult(market.Id, market.MarketPubKey,market.MarketSeedId, res.TransactionSignature);
                 return (res.TransactionSignature, result);
             },
             ct);

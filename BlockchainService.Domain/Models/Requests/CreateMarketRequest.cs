@@ -4,7 +4,6 @@ public record CreateMarketRequest(
     ulong MarketId,
     string Question,
     DateTime EndTime,
-    ulong InitialLiquidity,
-    string CollateralMint
+    ulong InitialLiquidity
 );
 

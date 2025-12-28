@@ -84,8 +84,7 @@ public class BlockchainController : ControllerBase
                 request.MarketId,
                 request.Question,
                 request.EndTime.ToUniversalTime(),
-                request.InitialLiquidity,
-                request.CollateralMint
+                request.InitialLiquidity
             );
 
             return Ok(new CreateMarketResponse(

@@ -15,6 +15,8 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.Configure<SolanaOptions>(builder.Configuration.GetSection("Solana"));
+
 // DbContext
 builder.Services.AddDbContext<MarketDbContext>(options =>
 {
@@ -97,13 +99,15 @@ builder.Services.Configure<BlockchainGatewayOptions>(
 
 builder.Services.AddAuthorization();
 
+builder.Services.AddTransient<ForwardAuthHeaderHandler>();
+
 // HttpClient to call BlockchainService
 builder.Services.AddHttpClient<IBlockchainGateway, BlockchainGatewayHttp>((sp, client) =>
 {
     var opts = sp.GetRequiredService<IOptions<BlockchainGatewayOptions>>().Value;
     client.BaseAddress = new Uri(opts.BaseUrl);
-    client.Timeout = TimeSpan.FromSeconds(120);
-});
+    client.Timeout = TimeSpan.FromSeconds(1200);
+}).AddHttpMessageHandler<ForwardAuthHeaderHandler>();
 
 builder.Services.AddHttpContextAccessor();
 

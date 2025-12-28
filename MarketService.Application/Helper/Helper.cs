@@ -138,5 +138,13 @@ public sealed class MarketActionExecutor
             throw new ExternalDependencyException("Blockchain dependency failed.", ex);
         }
     }
+    
+    
 
+}
+
+public class SolanaOptions
+{
+    public string FUSD { get; set; } = default!;
+    
 }

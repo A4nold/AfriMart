@@ -6,12 +6,12 @@ public sealed record CreateMarketCommand(
     string Question,
     DateTime EndTimeUtc,
     ulong InitialLiquidity,
-    string CollateralMint,
     string IdempotencyKey
 );
 
 public sealed record CreateMarketResult(
     Guid MarketId,
     string MarketPubKey,
+    ulong MarketSeedId,
     string TxSignature
 );

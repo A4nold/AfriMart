@@ -110,9 +110,14 @@ public sealed class BlockchainGatewayHttp : IBlockchainGateway
             marketId = req.MarketId,
             question = req.Question,
             endTime = req.EndTimeUtc,
-            initialLiquidity = req.InitialLiquidity,
-            collateralMint = req.CollateralMint
+            initialLiquidity = req.InitialLiquidity
         }, ct);
+        
+        if (!res.IsSuccessStatusCode)
+        {
+            var body = await res.Content.ReadAsStringAsync(ct);
+            throw new System.Exception($"HTTP {res.StatusCode}: {body}");
+        }
 
         return await ReadOrThrowAsync<BlockchainCreateMarketResponse>(res, ct);
     }
@@ -133,6 +138,7 @@ public sealed class BlockchainGatewayHttp : IBlockchainGateway
         // BlockchainService: POST /api/markets/{marketPubkey}/buy
         var res = await _http.PostAsJsonAsync($"/api/markets/{req.MarketPubkey}/buy", new
         {
+            marketPubKey = req.MarketPubkey,
             maxCollateralIn = req.MaxCollateralIn,
             minSharesOut = req.MinSharesOut,
             outcomeIndex = req.OutcomeIndex

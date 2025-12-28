@@ -4,8 +4,8 @@ public class MarketAction
 {
     public Guid Id { get; set; }
 
-    public Guid MarketId { get; set; }
-    public Market Market { get; set; } = default!;
+    public Guid? MarketId { get; set; }
+    public Market? Market { get; set; }
 
     // Who requested it (Auth user id). For admin-only actions this is admin.
     public Guid? RequestedByUserId { get; set; }

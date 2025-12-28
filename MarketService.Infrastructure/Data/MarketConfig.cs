@@ -67,6 +67,7 @@ public class MarketActionConfig : IEntityTypeConfiguration<MarketAction>
 
         b.Property(x => x.IdempotencyKey).IsRequired().HasMaxLength(128);
         b.Property(x => x.RequestJson).IsRequired().HasColumnType("jsonb");
+        b.Property(x => x.MarketId).IsRequired(false);
         
         b.Property(x => x.ResponseJson).HasColumnType("jsonb").IsRequired(false);
 

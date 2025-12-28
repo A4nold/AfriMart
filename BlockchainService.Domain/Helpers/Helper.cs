@@ -11,7 +11,7 @@ namespace BlockchainService.Inrastructure.Helpers
         public string RpcUrl { get; set; } = default!;
         public string ProgramId { get; set; } = default!;
         public string AuthorityKeypairPath { get; set; } = default!;
-
+        public string FUSD { get; set; } = default!;
         public bool SimulateBeforeSend { get; set; } = true;
 
         public string Commitment { get; set; } = "processed"; // processed/confirmed/finalized

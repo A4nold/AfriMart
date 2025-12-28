@@ -156,10 +156,9 @@ namespace BlockchainService.Api.Services
             string question,
             DateTime endTimeUtc,
             ulong initialLiquidity,
-            string collateralMint,
             CancellationToken ct = default)
         {
-            var collateralMintPk = new PublicKey(collateralMint);
+            var collateralMintPk = new PublicKey(_cfg.FUSD);
             var authorityPk = _authority.PublicKey;
             // Ensure authority ATA exists (payer = authority)
             var (authorityAta, createAuthorityAtaIx) =

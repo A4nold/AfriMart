@@ -61,7 +61,6 @@ public class MarketsController : ControllerBase
                 Question: req.Question,
                 EndTimeUtc: req.EndTime.ToUniversalTime(),
                 InitialLiquidity: req.InitialLiquidity,
-                CollateralMint: req.CollateralMint,
                 IdempotencyKey: GetIdempotencyKeyOrThrow()
             );
 
@@ -192,8 +191,7 @@ public sealed record CreateMarketApiRequest(
     ulong MarketId,
     string Question,
     DateTime EndTime,
-    ulong InitialLiquidity,
-    string CollateralMint
+    ulong InitialLiquidity
 );
 
 public sealed record ResolveMarketApiRequest(Guid ResolverUserId, byte WinningOutcomeIndex);
