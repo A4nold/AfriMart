@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using PortfolioService.Domain.Data;
 using PortfolioService.Domain.Interface;
 using System.Text;
+using PortfolioService.Infrastructure.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -40,7 +40,7 @@ builder.Services.AddDbContext<PortfolioDbContext>(options =>
 });
 
 // DI
-builder.Services.AddScoped<IPortfolioService, PortfolioService.Infrastructure.Services.PortfolioService>();
+builder.Services.AddScoped<IPortfolioService, PortfolioService.Infrastructure.Repository.PortfolioService>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

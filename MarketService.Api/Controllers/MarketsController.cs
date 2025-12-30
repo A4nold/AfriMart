@@ -93,7 +93,7 @@ public class MarketsController : ControllerBase
     // ---- Buy ----
     [Authorize]
     [HttpPost("{marketPubkey}/buy")]
-    public async Task<IActionResult> Buy([FromRoute] string marketPubkey, [FromBody] BuySharesApiRequest req, CancellationToken ct)
+    public async Task<IActionResult> Buy([FromRoute] string marketPubkey, [FromBody] BuySharesCommand req, CancellationToken ct)
     {
         try
         {
@@ -101,7 +101,7 @@ public class MarketsController : ControllerBase
                 UserId: req.UserId,
                 MarketPubKey: marketPubkey,
                 MaxCollateralIn: req.MaxCollateralIn,
-                MinSharesOut: req.MinSharesOut,
+                //MinSharesOut: req.MinSharesOut,
                 OutcomeIndex: req.OutcomeIndex,
                 IdempotencyKey: GetIdempotencyKeyOrThrow()
             );
@@ -115,7 +115,7 @@ public class MarketsController : ControllerBase
     // ---- Sell ----
     [Authorize]
     [HttpPost("{marketPubkey}/sell")]
-    public async Task<IActionResult> Sell([FromRoute] string marketPubkey, [FromBody] SellSharesApiRequest req, CancellationToken ct)
+    public async Task<IActionResult> Sell([FromRoute] string marketPubkey, [FromBody] SellSharesCommand req, CancellationToken ct)
     {
         try
         {
@@ -123,7 +123,7 @@ public class MarketsController : ControllerBase
                 UserId: req.UserId,
                 MarketPubKey: marketPubkey,
                 SharesIn: req.SharesIn,
-                MinCollateralOut: req.MinCollateralOut,
+                //MinCollateralOut: req.MinCollateralOut,
                 OutcomeIndex: req.OutcomeIndex,
                 IdempotencyKey: GetIdempotencyKeyOrThrow()
             );
@@ -196,8 +196,8 @@ public sealed record CreateMarketApiRequest(
 
 public sealed record ResolveMarketApiRequest(Guid ResolverUserId, byte WinningOutcomeIndex);
 
-public sealed record BuySharesApiRequest(Guid UserId, ulong MaxCollateralIn, ulong MinSharesOut, byte OutcomeIndex);
+//public sealed record BuySharesApiRequest(Guid UserId, ulong MaxCollateralIn, ulong MinSharesOut, byte OutcomeIndex);
 
-public sealed record SellSharesApiRequest(Guid UserId, ulong SharesIn, ulong MinCollateralOut, byte OutcomeIndex);
+//public sealed record SellSharesApiRequest(Guid UserId, ulong SharesIn, ulong MinCollateralOut, byte OutcomeIndex);
 
 public sealed record ClaimWinningsApiRequest(Guid UserId);

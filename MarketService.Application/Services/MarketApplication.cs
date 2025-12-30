@@ -7,6 +7,7 @@ using MarketService.Application.Requests;
 using MarketService.Domain.Commands;
 using MarketService.Domain.Entities;
 using MarketService.Domain.Interface;
+using MarketService.Domain.Models;
 using Microsoft.Extensions.Options;
 using CreateMarketCommand = MarketService.Application.Commands.CreateMarketCommand;
 
@@ -22,6 +23,9 @@ public sealed class MarketApplication : IMarketApplication
     private readonly IClock _clock;
     private readonly MarketActionExecutor _exec;
     private readonly SolanaOptions _cfg;
+    
+    private const ushort DefaultSlippageBps = 200; // 2.00%
+    private const ulong FeeBps = 50; // must match on-chain FEE_BPS
 
     public MarketApplication(
         IMarketRepository markets,
@@ -260,15 +264,42 @@ public sealed class MarketApplication : IMarketApplication
 
                 if (freshMarket.Status != Domain.Entities.MarketStatus.Open)
                     throw new ConflictException("Market is not open for trading.");
+                
+                // Read onchain market state
+                var marketState = await _chain.GetMarketAsync(freshMarket.MarketPubKey, innerCt);
+                
+                // Quote shares out (pure maths that matches anchor)
+                var side = cmd.OutcomeIndex == 0 ? OutcomeSide.Yes : OutcomeSide.No;
+                var quote = CpmmQuoteEngine.QuoteBuy(marketState, side, cmd.MaxCollateralIn, FeeBps);
 
+                var minSharesOut = CpmmQuoteEngine.ApplySlippageDown(quote.SharesOut, DefaultSlippageBps);
+                
+                //Guard: if trade is too small or slippage nukes it
+                if (quote.SharesOut == 0)
+                    throw new  ValidationException("Trade too small produces zero shares");
+                
+                if (minSharesOut == 0)
+                    minSharesOut = 1;
+                
+                
                 var res = await _chain.BuySharesAsync(new BlockchainBuyRequest(
-                    MarketPubkey: cmd.MarketPubKey,
+                    MarketPubkey: freshMarket.MarketPubKey,
                     MaxCollateralIn: cmd.MaxCollateralIn,
-                    MinSharesOut: cmd.MinSharesOut,
+                    MinSharesOut: minSharesOut,
                     OutcomeIndex: cmd.OutcomeIndex
                 ), innerCt);
 
-                await _positions.UpsertAfterTradeAsync(cmd.UserId, market.Id, cmd.OutcomeIndex, res.TransactionSignature, innerCt);
+                var snap = await _chain.GetPositionAsync(cmd.MarketPubKey, _chain.AuthorityPubKey, innerCt);
+
+                await _positions.UpsertAfterTradeAsync(
+                    userId: cmd.UserId,
+                    marketId: market.Id,
+                    positionPubKey: snap.PositionPubkey,
+                    yesShares: snap.YesShares,
+                    noShares: snap.NoShares,
+                    claimed: snap.Claimed,
+                    lastSyncedSlot: snap.LastSyncedSlot,
+                    ct: innerCt);
 
                 var result = new BuySharesResult(market.Id, market.MarketPubKey, cmd.OutcomeIndex, res.TransactionSignature);
                 return (res.TransactionSignature, result);
@@ -297,16 +328,42 @@ public sealed class MarketApplication : IMarketApplication
 
                 if (freshMarket.Status != Domain.Entities.MarketStatus.Open)
                     throw new ConflictException("Market is not open for trading.");
+                
+                // Read onchain market state
+                var marketState = await _chain.GetMarketAsync(freshMarket.MarketPubKey, innerCt);
+                
+                // Quote collateral out (pure maths that matches anchor)
+                var side = cmd.OutcomeIndex == 0 ? OutcomeSide.Yes : OutcomeSide.No;
+                var quote = CpmmQuoteEngine.QuoteSell(marketState, side, cmd.SharesIn, FeeBps);
+                
+                // Apply slippage haircut to net collateral out => minCollateralOut
+                var minCollateralOut = CpmmQuoteEngine.ApplySlippageDown(quote.NetCollateralOut, DefaultSlippageBps);
+                
+                if (quote.NetCollateralOut == 0)
+                    throw new  ValidationException("Trade too small produces zero collateral out");
+                
+                //for MVP, this is just to prevent any silly params
+                if (minCollateralOut == 0)
+                    minCollateralOut = 1;
 
                 var res = await _chain.SellSharesAsync(new BlockchainSellRequest(
-                    MarketPubkey: cmd.MarketPubKey,
+                    MarketPubkey: freshMarket.MarketPubKey,
                     SharesIn: cmd.SharesIn,
-                    MinCollateralOut: cmd.MinCollateralOut,
+                    MinCollateralOut: minCollateralOut,
                     OutcomeIndex: cmd.OutcomeIndex
                 ), innerCt);
 
+                var snap = await _chain.GetPositionAsync(cmd.MarketPubKey, _chain.AuthorityPubKey, innerCt);
+
                 await _positions.UpsertAfterTradeAsync(
-                    cmd.UserId, freshMarket.Id, cmd.OutcomeIndex, res.TransactionSignature, innerCt);
+                    userId: cmd.UserId,
+                    marketId: market.Id,
+                    positionPubKey: snap.PositionPubkey,
+                    yesShares: snap.YesShares,
+                    noShares: snap.NoShares,
+                    claimed: snap.Claimed,
+                    lastSyncedSlot: snap.LastSyncedSlot,
+                    ct: innerCt);
 
                 var result = new SellSharesResult(
                     freshMarket.Id, freshMarket.MarketPubKey, cmd.OutcomeIndex, res.TransactionSignature);

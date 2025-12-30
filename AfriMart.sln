@@ -42,6 +42,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PortfolioService.Api", "Por
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketService.Application", "MarketService.Application\MarketService.Application.csproj", "{CCEBC97E-D0EC-47EB-BBB4-B39C5CBD8B4A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PortfolioService.Application", "PortfolioService.Application\PortfolioService.Application.csproj", "{BA742459-C68A-4309-BCF6-4FD3DEACB9D0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -100,6 +102,10 @@ Global
 		{CCEBC97E-D0EC-47EB-BBB4-B39C5CBD8B4A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{CCEBC97E-D0EC-47EB-BBB4-B39C5CBD8B4A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{CCEBC97E-D0EC-47EB-BBB4-B39C5CBD8B4A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BA742459-C68A-4309-BCF6-4FD3DEACB9D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BA742459-C68A-4309-BCF6-4FD3DEACB9D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BA742459-C68A-4309-BCF6-4FD3DEACB9D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BA742459-C68A-4309-BCF6-4FD3DEACB9D0}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -118,6 +124,7 @@ Global
 		{7DA792FF-0164-41D8-8329-4D5E75725021} = {A7283FDE-8F99-4619-9CD7-31FF1CBA226C}
 		{98F98EAD-46A8-4ECE-A4F1-DF9325D3987F} = {A7283FDE-8F99-4619-9CD7-31FF1CBA226C}
 		{CCEBC97E-D0EC-47EB-BBB4-B39C5CBD8B4A} = {FEAF29E3-3DF0-4E06-9FCC-3FC0A03D5997}
+		{BA742459-C68A-4309-BCF6-4FD3DEACB9D0} = {A7283FDE-8F99-4619-9CD7-31FF1CBA226C}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {1A1DC1DF-632F-4C21-8725-96509536348D}

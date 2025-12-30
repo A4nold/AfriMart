@@ -1,11 +1,11 @@
 ﻿using MarketService.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using PortfolioService.Domain.Data;
 using PortfolioService.Domain.Interface;
 using PortfolioService.Domain.Models;
+using PortfolioService.Infrastructure.Data;
 
-namespace PortfolioService.Infrastructure.Services;
+namespace PortfolioService.Infrastructure.Repository;
 
 public class PortfolioService : IPortfolioService
 {
@@ -21,7 +21,7 @@ public class PortfolioService : IPortfolioService
     public async Task<PortfolioOverviewDto> GetUserPortfolioAsync(Guid userId, CancellationToken ct = default)
     {
         // Load positions with markets + outcomes
-        var positions = await _db.MarketPositions
+        var positions = await _db.UserMarketPositions
             .Include(p => p.Market)
             .ThenInclude(m => m.Outcomes)
             .Where(p => p.UserId == userId)
@@ -37,35 +37,35 @@ public class PortfolioService : IPortfolioService
             var market = p.Market;
             // var winningIndex = market.WinningOutcomeIndex; // assume byte? type
             // var isResolved = market.Status == MarketStatus.Resolved;
-            bool? won = null;
+            //bool? won = null;
 
             // if (isResolved && winningIndex.HasValue)
             // {
             //     won = (byte)p.OutcomeIndex == winningIndex.Value;
             // }
 
-            var outcomeLabel = market.Outcomes
-                .FirstOrDefault(o => o.OutcomeIndex == p.OutcomeIndex)?.Label ?? "";
+            // var outcomeLabel = market.Outcomes
+            //     .FirstOrDefault(o => o.OutcomeIndex == p.OutcomeIndex)?.Label ?? "";
 
-            var dto = new PortfolioPositionDto
+            var dto = new PositionDto
             {
-                PositionId = p.Id,
-                MarketId = p.MarketId,
-                MarketQuestion = market.Question,
-                // MarketStatus = market.Status.ToString(),
-                // MarketEndTime = market.EndTime,
-
-                OutcomeIndex = p.OutcomeIndex,
-                OutcomeLabel = outcomeLabel,
-
-                StakeAmount = p.StakeAmount,
-                Claimed = p.Claimed,
-                Won = won,
-
-                TxSignature = p.TxSignature,
-
-                PlacedAt = p.PlacedAt,
-                ClaimedAt = p.ClaimedAt
+                // PositionId = p.Id,
+                // MarketId = p.MarketId,
+                // MarketQuestion = market.Question,
+                // // MarketStatus = market.Status.ToString(),
+                // // MarketEndTime = market.EndTime,
+                //
+                // OutcomeIndex = p.OutcomeIndex,
+                // OutcomeLabel = outcomeLabel,
+                //
+                // StakeAmount = p.StakeAmount,
+                // Claimed = p.Claimed,
+                // Won = won,
+                //
+                // TxSignature = p.TxSignature,
+                //
+                // PlacedAt = p.PlacedAt,
+                // ClaimedAt = p.ClaimedAt
             };
 
             // if (!isResolved)

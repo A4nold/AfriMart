@@ -6,7 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace PortfolioService.Domain.Data
+namespace PortfolioService.Infrastructure.Data
 {
     public class PortfolioDbContext : DbContext
     {
@@ -15,9 +15,9 @@ namespace PortfolioService.Domain.Data
         }
 
         public DbSet<Market> Markets => Set<Market>();
-        public DbSet<MarketOutcome> MarketOutcomes => Set<MarketOutcome>();
-        public DbSet<MarketPosition> MarketPositions => Set<MarketPosition>();
-        public DbSet<MarketResolution> MarketResolutions => Set<MarketResolution>();
+        
+        public DbSet<UserMarketPosition> UserMarketPositions => Set<UserMarketPosition>();
+        public DbSet<MarketAction> MarketActions => Set<MarketAction>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

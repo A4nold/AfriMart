@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace BlockchainService.Inrastructure.Helpers
+namespace BlockchainService.Domain.Helpers
 {
     public class SolanaOptions
     {

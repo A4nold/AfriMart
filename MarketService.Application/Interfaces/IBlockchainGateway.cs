@@ -16,6 +16,8 @@ public interface IBlockchainGateway
     Task<BlockchainBuyResponse> BuySharesAsync(BlockchainBuyRequest req, CancellationToken ct);
     Task<BlockchainSellResponse> SellSharesAsync(BlockchainSellRequest req, CancellationToken ct);
     Task<BlockchainClaimResponse> ClaimWinningsAsync(BlockchainClaimRequest req, CancellationToken ct);
+    Task<GetPositionResponse> GetPositionAsync(string marketPubkey, string userPubKey,  CancellationToken ct);
+    Task<MarketV2State> GetMarketAsync(string marketPubkey, CancellationToken ct);
 }
 
 public sealed record BlockchainTxResult(

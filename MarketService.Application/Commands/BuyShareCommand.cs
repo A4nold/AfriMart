@@ -4,7 +4,7 @@ public sealed record BuySharesCommand(
     Guid UserId,
     string MarketPubKey,
     ulong MaxCollateralIn,
-    ulong MinSharesOut,
+    //ulong MinSharesOut,
     byte OutcomeIndex,
     string IdempotencyKey
 );

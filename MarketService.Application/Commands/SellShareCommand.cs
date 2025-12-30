@@ -4,7 +4,7 @@ public sealed record SellSharesCommand(
     Guid UserId,
     string MarketPubKey,
     ulong SharesIn,
-    ulong MinCollateralOut,
+    //ulong MinCollateralOut,
     byte OutcomeIndex,
     string IdempotencyKey
 );

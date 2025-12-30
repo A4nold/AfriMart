@@ -38,24 +38,6 @@ public sealed class BlockchainGatewayHttp : IBlockchainGateway
         _programId = new PublicKey(_opts.ProgramId);
         _authorityPublicKey = new PublicKey(_opts.AuthorityPubKey);
     }
-    
-    private static Account LoadAuthorityAccount(string path)
-    {
-        var json = File.ReadAllText(path);
-        var keystore = new SolanaKeyStoreService();
-
-        //for typical id.json with no passpharse
-        var wallet = keystore.RestoreKeystore(json);
-
-        //Split 64-bytes Solana key pair
-        // var privateKey = keyBytes.Take(32).ToArray();
-        //var publicKey = keyBytes.Skip(32).ToArray();
-
-        //Use Solnet's Wallet.account here to read the 64-byte secret key.
-        Account account = wallet.Account;
-        Console.WriteLine($"[Authority] Authority pubkey = '{account.PublicKey.Key}'");
-        return account;
-    }
 
     public string ProgramId => _programId.Key;
     public string AuthorityPubKey => _authorityPublicKey.Key;
@@ -171,6 +153,34 @@ public sealed class BlockchainGatewayHttp : IBlockchainGateway
         return new BlockchainClaimResponse(dto.MarketPubkey,dto.TransactionSignature);
     }
 
+    public async Task<GetPositionResponse> GetPositionAsync(string marketPubKey, string ownerPubKey, CancellationToken ct)
+    {
+        // BlockchainService: GET /api/markets/{marketPubkey}/positions/{ownerPubkey}
+        var res = await _http.GetAsync($"/api/markets/{marketPubKey}/positions/{ownerPubKey}", ct);
+
+        if (!res.IsSuccessStatusCode)
+        {
+            var body = await res.Content.ReadAsStringAsync(ct);
+            throw new System.Exception($"HTTP {res.StatusCode}: {body}");
+        }
+
+        return await ReadOrThrowAsync<GetPositionResponse>(res, ct);
+    }
+
+    public async Task<MarketV2State> GetMarketAsync(string marketPubkey, CancellationToken ct)
+    {
+        // BlockchainService: GET /api/markets/{marketPubkey}/state
+        var res = await _http.GetAsync($"/api/markets/{marketPubkey}/state", ct);
+        
+        if (!res.IsSuccessStatusCode)
+        {
+            var body = await res.Content.ReadAsStringAsync(ct);
+            throw new System.Exception($"HTTP {res.StatusCode}: {body}");
+        }
+
+        return await ReadOrThrowAsync<MarketV2State>(res, ct);
+    }
+    
     private sealed record ClaimDto(string MarketPubkey, string TransactionSignature);
 
     private static async Task<T> ReadOrThrowAsync<T>(HttpResponseMessage res, CancellationToken ct)

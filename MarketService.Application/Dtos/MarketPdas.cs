@@ -1,3 +1,5 @@
+using Solnet.Wallet;
+
 namespace MarketService.Application.Dtos;
 
 public sealed record MarketPdas(
@@ -7,3 +9,30 @@ public sealed record MarketPdas(
 );
 
 public sealed record CreateMarketIdemPayload(ulong MarketSeedId);
+
+public sealed record GetPositionResponse(
+    string MarketPubkey,
+    string OwnerPubkey,
+    string PositionPubkey,
+    ulong YesShares,
+    ulong NoShares,
+    bool Claimed,
+    ulong LastSyncedSlot
+);
+
+public sealed record MarketV2State(
+    ulong MarketId,
+    PublicKey Authority,
+    string Question,
+    PublicKey CollateralMint,
+    PublicKey Vault,
+    long EndTime,
+    byte Status,
+    sbyte WinningOutcome,
+    ulong YesPool,
+    ulong NoPool,
+    ulong TotalYesShares,
+    ulong TotalNoShares,
+    ulong ResolvedVaultBalance,
+    ulong ResolvedTotalWinningShares
+);

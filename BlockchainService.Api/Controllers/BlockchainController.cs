@@ -1,9 +1,12 @@
-﻿using BlockchainService.Api.Exceptions;
+﻿using BlockchainService.Api.Dto;
+using BlockchainService.Api.Exceptions;
 using Microsoft.AspNetCore.Authorization;
 using BlockchainService.Api.Models.Requests;
 using BlockchainService.Api.Models.Responses;
 using BlockchainService.Api.Services;
+using BlockchainService.Domain.Models.Requests;
 using Microsoft.AspNetCore.Mvc;
+using Solnet.Wallet;
 
 namespace BlockchainService.Api.Controllers;
 
@@ -228,4 +231,49 @@ public class BlockchainController : ControllerBase
             return StatusCode(500, new { code = "INTERNAL_ERROR", message = ex.Message });
         }
     }
+    
+    [HttpGet("{marketPubkey}/positions/{userPubkey}")]
+    [Authorize]
+    public async Task<ActionResult<GetPositionOnChain>> GetPosition(
+        [FromRoute] string marketPubkey,
+        [FromRoute] string userPubkey,
+        CancellationToken ct)
+    {
+        try
+        {
+            var pos = await _client.GetPositionAsync(marketPubkey, userPubkey, ct);
+            return Ok(pos);
+        }
+        catch (AnchorProgramException ex)
+        {
+            return MapAnchorError(ex);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { code = "INTERNAL_ERROR", message = ex.Message });
+        }
+    }
+
+    [HttpGet("markets/{marketPubkey}/state")]
+    [Authorize]
+    public async Task<ActionResult<PredictionProgramClient.MarketV2State>> GetMarket(
+        [FromRoute] string marketPubkey, CancellationToken ct)
+    {
+        try
+        {
+            var pk = new PublicKey(marketPubkey);
+            var state = await _client.GetMarketAsync(pk, ct);
+            return Ok(state);
+        }
+        catch (AnchorProgramException ex)
+        {
+            return MapAnchorError(ex);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { code = "INTERNAL_ERROR", message = ex.Message });
+        }
+        
+    }
+
 }

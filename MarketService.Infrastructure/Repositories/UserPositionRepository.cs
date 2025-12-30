@@ -19,20 +19,20 @@ public class UserPositionRepository : IUserPositionRepository
     public async Task UpsertAfterTradeAsync(
         Guid userId,
         Guid marketId,
-        byte outcomeIndex,
-        string txSig,
+        string positionPubKey,
+        ulong yesShares,
+        ulong noShares,
+        bool claimed,
+        ulong? lastSyncedSlot,
         CancellationToken ct)
     {
-        // Note: outcomeIndex + txSig are not persisted in UserMarketPosition with your current schema.
-        // They should live in MarketAction (ledger). This snapshot row just ensures PortfolioService has a row to read.
-
         var set = _db.Set<UserMarketPosition>();
 
         var existing = await set.FirstOrDefaultAsync(
             x => x.UserId == userId && x.MarketId == marketId,
             ct);
 
-        if (existing == null)
+        if (existing is null)
         {
             var created = new UserMarketPosition
             {
@@ -40,29 +40,29 @@ public class UserPositionRepository : IUserPositionRepository
                 UserId = userId,
                 MarketId = marketId,
 
-                // Optional: if you don't know PositionPubKey yet, keep it empty.
-                // If you *do* know it elsewhere, update it in a different call.
-                PositionPubKey = string.Empty,
+                PositionPubKey = positionPubKey,
 
-                YesShares = 0,
-                NoShares = 0,
-                Claimed = false,
+                YesShares = yesShares,
+                NoShares = noShares,
+                Claimed = claimed,
 
-                LastSyncedSlot = null,
+                LastSyncedSlot = lastSyncedSlot,
                 LastSyncedAtUtc = _clock.UtcNow
             };
 
-            await set.AddAsync(created, ct);
+            await set.AddAsync(created);
             return;
         }
 
-        // Don’t touch share numbers here (chain is truth) unless you’re actually syncing them.
-        // This just records “we had activity” so the read model can decide to refresh.
+        // Update snapshot with chain truth
+        existing.PositionPubKey = positionPubKey;
+        existing.YesShares = yesShares;
+        existing.NoShares = noShares;
+        existing.Claimed = claimed;
+        existing.LastSyncedSlot = lastSyncedSlot;
         existing.LastSyncedAtUtc = _clock.UtcNow;
     }
-    
-    // Invariant: UserMarketPosition must exist before claim.
-    // If missing, state is inconsistent and must be investigated.
+
     public async Task MarkClaimedAsync(Guid userId, Guid marketId, CancellationToken ct)
     {
         // Note: txSig should be persisted on MarketAction. Snapshot just marks claimed.
@@ -74,13 +74,14 @@ public class UserPositionRepository : IUserPositionRepository
 
         if (existing == null)
         {
-            // This should not normally happen.
-            // Either:
-            // - snapshot drift
-            // - out-of-order execution
-            // - bug
             throw new InvalidOperationException(
                 $"Cannot mark claimed: no UserMarketPosition exists for user {userId} on market {marketId}");
+        }
+        
+        if (string.IsNullOrWhiteSpace(existing.PositionPubKey))
+        {
+            throw new InvalidOperationException(
+                $"Cannot mark claimed: PositionPubKey missing for user {userId} on market {marketId}");
         }
 
         if (existing.Claimed)

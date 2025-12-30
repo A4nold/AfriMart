@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace PortfolioService.Domain.Models
 {
-    public sealed class PortfolioPositionDto
+    public sealed class PositionDto
     {
         public Guid PositionId { get; set; }
         public Guid MarketId { get; set; }

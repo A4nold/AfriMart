@@ -1,4 +1,4 @@
-namespace BlockchainService.Api.Models.Requests;
+namespace BlockchainService.Domain.Models.Requests;
 
 public class SellSharesRequest
 {

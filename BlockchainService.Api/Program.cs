@@ -1,8 +1,8 @@
-﻿using BlockchainService.Inrastructure.Helpers;
-using System.Text;
+﻿using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using BlockchainService.Api.Services;
+using BlockchainService.Domain.Helpers;
 using Solnet.Wallet;
 
 var builder = WebApplication.CreateBuilder(args);
