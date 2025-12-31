@@ -21,11 +21,12 @@ public sealed record GetPositionResponse(
 );
 
 public sealed record MarketV2State(
+    ulong Slot,
     ulong MarketId,
-    PublicKey Authority,
+    string Authority,
     string Question,
-    PublicKey CollateralMint,
-    PublicKey Vault,
+    string CollateralMint,
+    string Vault,
     long EndTime,
     byte Status,
     sbyte WinningOutcome,
@@ -36,3 +37,5 @@ public sealed record MarketV2State(
     ulong ResolvedVaultBalance,
     ulong ResolvedTotalWinningShares
 );
+
+public sealed record MarketStateResponse(ulong Slot, MarketV2State State);

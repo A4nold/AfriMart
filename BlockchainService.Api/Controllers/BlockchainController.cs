@@ -254,7 +254,7 @@ public class BlockchainController : ControllerBase
         }
     }
 
-    [HttpGet("markets/{marketPubkey}/state")]
+    [HttpGet("{marketPubkey}/state")]
     [Authorize]
     public async Task<ActionResult<PredictionProgramClient.MarketV2State>> GetMarket(
         [FromRoute] string marketPubkey, CancellationToken ct)
@@ -262,8 +262,10 @@ public class BlockchainController : ControllerBase
         try
         {
             var pk = new PublicKey(marketPubkey);
-            var state = await _client.GetMarketAsync(pk, ct);
-            return Ok(state);
+            var (slot, marketV2State) = await _client.GetMarketAsync(pk, ct);
+            return Ok(new MarketStateResponse{
+                Slot = slot, State = marketV2State
+            });
         }
         catch (AnchorProgramException ex)
         {

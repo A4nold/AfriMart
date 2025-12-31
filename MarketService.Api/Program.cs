@@ -47,6 +47,7 @@ builder.Services.AddScoped<IMarketRepository, MarketRepository>();
 builder.Services.AddScoped<IMarketActionRepository, MarketActionRepository>();
 builder.Services.AddScoped<IUserPositionRepository, UserPositionRepository>();
 builder.Services.AddScoped<IMarketApplication, MarketApplication>();
+builder.Services.AddScoped<ICpmmQuoteEngine, CpmmQuoteEngine>();
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 

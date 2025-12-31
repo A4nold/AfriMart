@@ -167,7 +167,7 @@ public sealed class BlockchainGatewayHttp : IBlockchainGateway
         return await ReadOrThrowAsync<GetPositionResponse>(res, ct);
     }
 
-    public async Task<MarketV2State> GetMarketAsync(string marketPubkey, CancellationToken ct)
+    public async Task<MarketStateResponse> GetMarketAsync(string marketPubkey, CancellationToken ct)
     {
         // BlockchainService: GET /api/markets/{marketPubkey}/state
         var res = await _http.GetAsync($"/api/markets/{marketPubkey}/state", ct);
@@ -178,7 +178,7 @@ public sealed class BlockchainGatewayHttp : IBlockchainGateway
             throw new System.Exception($"HTTP {res.StatusCode}: {body}");
         }
 
-        return await ReadOrThrowAsync<MarketV2State>(res, ct);
+        return await ReadOrThrowAsync<MarketStateResponse>(res, ct);
     }
     
     private sealed record ClaimDto(string MarketPubkey, string TransactionSignature);

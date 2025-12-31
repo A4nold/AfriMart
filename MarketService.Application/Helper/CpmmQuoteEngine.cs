@@ -1,19 +1,20 @@
 using MarketService.Application.Dtos;
+using MarketService.Application.Interfaces;
 using MarketService.Domain.Models;
 
 namespace MarketService.Application.Helper;
 
-public class CpmmQuoteEngine
+public class CpmmQuoteEngine : ICpmmQuoteEngine
 {
     private const ulong BpsDenom = 10_000;
 
-    public static BuyQuote QuoteBuy(
-        MarketV2State m,
+    public BuyQuote QuoteBuy(
+        MarketStateResponse m,
         OutcomeSide side,
         ulong maxCollateralIn,
         ulong feeBps)
     {
-        if (m.YesPool == 0 || m.NoPool == 0) throw new InvalidOperationException("Invalid liquidity.");
+        if (m.State.YesPool == 0 || m.State.NoPool == 0) throw new InvalidOperationException("Invalid liquidity.");
         if (maxCollateralIn == 0) throw new ArgumentException("maxCollateralIn must be > 0.");
         if (feeBps >= BpsDenom) throw new ArgumentException("feeBps must be < 10_000.");
 
@@ -21,14 +22,15 @@ public class CpmmQuoteEngine
 
         (ulong newYes, ulong newNo, ulong sharesOut) = side switch
         {
-            OutcomeSide.Yes => CpmmBuyYes(m.YesPool, m.NoPool, netIn),
-            OutcomeSide.No  => CpmmBuyNo(m.YesPool, m.NoPool, netIn),
+            OutcomeSide.Yes => CpmmBuyYes(m.State.YesPool, m.State.NoPool, netIn),
+            OutcomeSide.No  => CpmmBuyNo(m.State.YesPool, m.State.NoPool, netIn),
             _ => throw new ArgumentOutOfRangeException(nameof(side))
         };
 
         if (sharesOut == 0) throw new InvalidOperationException("Zero shares out (trade too small).");
 
         return new BuyQuote(
+            MarketId:m.State.MarketId,
             Side: side,
             GrossCollateralIn: maxCollateralIn,
             FeePaid: fee,
@@ -38,21 +40,21 @@ public class CpmmQuoteEngine
             NewNoPool: newNo);
     }
 
-    public static SellQuote QuoteSell(
-        MarketV2State m,
+    public SellQuote QuoteSell(
+        MarketStateResponse m,
         OutcomeSide side,
         ulong sharesIn,
         ulong feeBps)
     {
-        if (m.YesPool == 0 || m.NoPool == 0) throw new InvalidOperationException("Invalid liquidity.");
+        if (m.State.YesPool == 0 || m.State.NoPool == 0) throw new InvalidOperationException("Invalid liquidity.");
         if (sharesIn == 0) throw new ArgumentException("sharesIn must be > 0.");
         if (feeBps >= BpsDenom) throw new ArgumentException("feeBps must be < 10_000.");
 
         // CPMM computes gross out
         (ulong newYes, ulong newNo, ulong grossOut) = side switch
         {
-            OutcomeSide.Yes => CpmmSellYes(m.YesPool, m.NoPool, sharesIn),
-            OutcomeSide.No  => CpmmSellNo(m.YesPool, m.NoPool, sharesIn),
+            OutcomeSide.Yes => CpmmSellYes(m.State.YesPool, m.State.NoPool, sharesIn),
+            OutcomeSide.No  => CpmmSellNo(m.State.YesPool, m.State.NoPool, sharesIn),
             _ => throw new ArgumentOutOfRangeException(nameof(side))
         };
 
@@ -82,6 +84,7 @@ public class CpmmQuoteEngine
         }
 
         return new SellQuote(
+            MarketId:m.State.MarketId,
             Side: side,
             SharesIn: sharesIn,
             GrossCollateralOut: grossOut,
@@ -95,7 +98,7 @@ public class CpmmQuoteEngine
     // Slippage helpers (optional)
     // ---------------------------
 
-    public static ulong ApplySlippageDown(ulong amount, ushort slippageBps)
+    public ulong ApplySlippageDown(ulong amount, ushort slippageBps)
     {
         // returns floor(amount * (1 - slippageBps/10_000))
         if (slippageBps >= BpsDenom) return 0;

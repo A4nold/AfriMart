@@ -1,3 +1,5 @@
+using BlockchainService.Api.Services;
+
 namespace BlockchainService.Api.Dto;
 
 public sealed record GetPositionOnChain(
@@ -9,6 +11,12 @@ public sealed record GetPositionOnChain(
     bool Claimed,
     ulong? LastSyncedSlot
 );
+
+public sealed record MarketStateResponse{
+    public ulong Slot { get; set; }
+    public PredictionProgramClient.MarketV2State? State { get; set; }
+    
+};
 
 public sealed record GetMarketResponse(
     string MarketPubkey,

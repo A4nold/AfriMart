@@ -378,7 +378,9 @@ namespace BlockchainService.Api.Services
         {
             var marketPk = new PublicKey(marketPubkey);
 
-            var collateralMintPk = await GetMarketCollateralMintAsync(marketPk, ct);
+            var collateralMintString = await GetMarketCollateralMintAsync(marketPk, ct);
+            
+            var collateralMintPk = new PublicKey(collateralMintString);
 
             var userPk = _authority.PublicKey; // MVP user = authority
 
@@ -494,7 +496,9 @@ namespace BlockchainService.Api.Services
             var marketPk = new PublicKey(marketPubkey);
             var userPk = _authority.PublicKey;
 
-            var collateralMintPk = await GetMarketCollateralMintAsync(marketPk, ct);
+            var collateralMintString = await GetMarketCollateralMintAsync(marketPk, ct);
+            
+            var collateralMintPk = new PublicKey(collateralMintString);
 
             var (userCollateralAtaPk, createUserAtaIx) =
                 await EnsureAtaIxAsync(userPk, collateralMintPk, feePayer: _authority.PublicKey, ct);
@@ -610,7 +614,7 @@ namespace BlockchainService.Api.Services
             if (marketState.ResolvedVaultBalance == 0 || marketState.ResolvedTotalWinningShares == 0)
                 throw new Exception("Market snapshots are not set (resolved_vault_balance / resolved_total_winning_shares). Ensure resolve_market was called with vault account.");
 
-            var collateralMintPk = marketState.CollateralMint;
+            var collateralMintPk = new PublicKey(marketState.CollateralMint);
 
             var (userCollateralAtaPk, createUserAtaIx) =
                 await EnsureAtaIxAsync(userPk, collateralMintPk, feePayer: _authority.PublicKey, ct);
@@ -823,10 +827,10 @@ namespace BlockchainService.Api.Services
         // -----------------------------
         public sealed record MarketV2State(
             ulong MarketId,
-            PublicKey Authority,
+            string Authority,
             string Question,
-            PublicKey CollateralMint,
-            PublicKey Vault,
+            string CollateralMint,
+            string Vault,
             long EndTime,
             byte Status,
             sbyte WinningOutcome,
@@ -955,7 +959,7 @@ namespace BlockchainService.Api.Services
 
 
         // Your small helper used by buy/sell/claim
-        private async Task<PublicKey> GetMarketCollateralMintAsync(PublicKey marketPk, CancellationToken ct = default)
+        private async Task<string> GetMarketCollateralMintAsync(PublicKey marketPk, CancellationToken ct = default)
         {
             var (slot, market) = await GetMarketAsync(marketPk, ct);
             return market.CollateralMint;

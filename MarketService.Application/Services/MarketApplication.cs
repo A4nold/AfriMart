@@ -4,7 +4,6 @@ using MarketService.Application.Exception;
 using MarketService.Application.Helper;
 using MarketService.Application.Interfaces;
 using MarketService.Application.Requests;
-using MarketService.Domain.Commands;
 using MarketService.Domain.Entities;
 using MarketService.Domain.Interface;
 using MarketService.Domain.Models;
@@ -23,6 +22,7 @@ public sealed class MarketApplication : IMarketApplication
     private readonly IClock _clock;
     private readonly MarketActionExecutor _exec;
     private readonly SolanaOptions _cfg;
+    private readonly ICpmmQuoteEngine _quotes;
     
     private const ushort DefaultSlippageBps = 200; // 2.00%
     private const ulong FeeBps = 50; // must match on-chain FEE_BPS
@@ -34,7 +34,8 @@ public sealed class MarketApplication : IMarketApplication
         IBlockchainGateway chain,
         IUnitOfWork uow,
         IClock clock,
-        IOptions<SolanaOptions> options)
+        IOptions<SolanaOptions> options,
+        ICpmmQuoteEngine quotes)
     {
         var cfg = options.Value;
         _markets = markets;
@@ -45,6 +46,7 @@ public sealed class MarketApplication : IMarketApplication
         _clock = clock;
         _exec = new MarketActionExecutor(actions, uow, clock);
         _cfg = cfg;
+        _quotes = quotes;
     }
     
     private void PopulateMarketPdas(Domain.Entities.Market market)
@@ -265,14 +267,14 @@ public sealed class MarketApplication : IMarketApplication
                 if (freshMarket.Status != Domain.Entities.MarketStatus.Open)
                     throw new ConflictException("Market is not open for trading.");
                 
-                // Read onchain market state
+                // Read onchain market state(would have to keep this as an auth signed transactions)
                 var marketState = await _chain.GetMarketAsync(freshMarket.MarketPubKey, innerCt);
                 
                 // Quote shares out (pure maths that matches anchor)
                 var side = cmd.OutcomeIndex == 0 ? OutcomeSide.Yes : OutcomeSide.No;
-                var quote = CpmmQuoteEngine.QuoteBuy(marketState, side, cmd.MaxCollateralIn, FeeBps);
+                var quote = _quotes.QuoteBuy(marketState, side, cmd.MaxCollateralIn, FeeBps);
 
-                var minSharesOut = CpmmQuoteEngine.ApplySlippageDown(quote.SharesOut, DefaultSlippageBps);
+                var minSharesOut = _quotes.ApplySlippageDown(quote.SharesOut, DefaultSlippageBps);
                 
                 //Guard: if trade is too small or slippage nukes it
                 if (quote.SharesOut == 0)
@@ -334,10 +336,10 @@ public sealed class MarketApplication : IMarketApplication
                 
                 // Quote collateral out (pure maths that matches anchor)
                 var side = cmd.OutcomeIndex == 0 ? OutcomeSide.Yes : OutcomeSide.No;
-                var quote = CpmmQuoteEngine.QuoteSell(marketState, side, cmd.SharesIn, FeeBps);
+                var quote = _quotes.QuoteSell(marketState, side, cmd.SharesIn, FeeBps);
                 
                 // Apply slippage haircut to net collateral out => minCollateralOut
-                var minCollateralOut = CpmmQuoteEngine.ApplySlippageDown(quote.NetCollateralOut, DefaultSlippageBps);
+                var minCollateralOut = _quotes.ApplySlippageDown(quote.NetCollateralOut, DefaultSlippageBps);
                 
                 if (quote.NetCollateralOut == 0)
                     throw new  ValidationException("Trade too small produces zero collateral out");
