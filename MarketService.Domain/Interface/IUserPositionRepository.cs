@@ -6,6 +6,7 @@ public interface IUserPositionRepository
     Task UpsertAfterTradeAsync(
         Guid userId,
         Guid marketId,
+        string ownerPubkey,
         string positionPubKey,
         ulong yesShares,
         ulong noShares,

@@ -266,6 +266,9 @@ namespace MarketService.Infrastructure.Migrations
                     b.Property<bool>("Claimed")
                         .HasColumnType("boolean");
 
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime?>("LastSyncedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -278,10 +281,18 @@ namespace MarketService.Infrastructure.Migrations
                     b.Property<decimal>("NoShares")
                         .HasColumnType("numeric(20,0)");
 
+                    b.Property<string>("OwnerPubkey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<string>("PositionPubKey")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");

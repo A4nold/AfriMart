@@ -19,7 +19,8 @@ public class UserPositionRepository : IUserPositionRepository
     public async Task UpsertAfterTradeAsync(
         Guid userId,
         Guid marketId,
-        string positionPubKey,
+        string ownerPubkey,
+        string positionPubkey,
         ulong yesShares,
         ulong noShares,
         bool claimed,
@@ -31,6 +32,8 @@ public class UserPositionRepository : IUserPositionRepository
         var existing = await set.FirstOrDefaultAsync(
             x => x.UserId == userId && x.MarketId == marketId,
             ct);
+        
+        var now = _clock.UtcNow;
 
         if (existing is null)
         {
@@ -39,28 +42,35 @@ public class UserPositionRepository : IUserPositionRepository
                 Id = Guid.NewGuid(),
                 UserId = userId,
                 MarketId = marketId,
-
-                PositionPubKey = positionPubKey,
+                
+                OwnerPubkey = ownerPubkey,
+                PositionPubKey = positionPubkey,
 
                 YesShares = yesShares,
                 NoShares = noShares,
                 Claimed = claimed,
 
                 LastSyncedSlot = lastSyncedSlot,
-                LastSyncedAtUtc = _clock.UtcNow
+                LastSyncedAtUtc = now,
+                
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
             };
 
-            await set.AddAsync(created);
+            await set.AddAsync(created, ct);
             return;
         }
 
         // Update snapshot with chain truth
-        existing.PositionPubKey = positionPubKey;
+        existing.OwnerPubkey = ownerPubkey;
+        existing.PositionPubKey = positionPubkey;
         existing.YesShares = yesShares;
         existing.NoShares = noShares;
         existing.Claimed = claimed;
         existing.LastSyncedSlot = lastSyncedSlot;
-        existing.LastSyncedAtUtc = _clock.UtcNow;
+        existing.LastSyncedAtUtc = now;
+        
+        existing.UpdatedAtUtc = now;
     }
 
     public async Task MarkClaimedAsync(Guid userId, Guid marketId, CancellationToken ct)

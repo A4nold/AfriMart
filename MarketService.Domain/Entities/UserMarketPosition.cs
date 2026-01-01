@@ -8,6 +8,8 @@ public class UserMarketPosition
     public Guid MarketId { get; set; }
     public Market Market { get; set; } = default!;
 
+    public string OwnerPubkey { get; set; } = default!;
+
     // On-chain pointer (optional but useful)
     public string PositionPubKey { get; set; } = default!; // position_v2 PDA
 
@@ -18,4 +20,7 @@ public class UserMarketPosition
 
     public ulong? LastSyncedSlot { get; set; }
     public DateTime? LastSyncedAtUtc { get; set; }
+    
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
 }

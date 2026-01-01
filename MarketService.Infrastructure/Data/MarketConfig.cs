@@ -103,8 +103,16 @@ public class UserMarketPositionConfig : IEntityTypeConfiguration<UserMarketPosit
     public void Configure(EntityTypeBuilder<UserMarketPosition> b)
     {
         b.HasKey(x => x.Id);
-
+        
+        b.Property(c => c.OwnerPubkey).IsRequired().HasMaxLength(64);
         b.Property(x => x.PositionPubKey).IsRequired().HasMaxLength(64);
+
+        b.Property(x => x.CreatedAtUtc).IsRequired();
+        b.Property(x => x.UpdatedAtUtc).IsRequired();
+
+        b.Property(x => x.YesShares).HasColumnType("numeric(20,0)");
+        b.Property(x => x.NoShares).HasColumnType("numeric(20,0)");
+        b.Property(x => x.LastSyncedSlot).HasColumnType("numeric(20,0)");
 
         b.HasIndex(x => new { x.UserId, x.MarketId }).IsUnique();
         b.HasIndex(x => x.PositionPubKey).IsUnique();

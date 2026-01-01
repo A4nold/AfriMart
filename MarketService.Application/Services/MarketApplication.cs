@@ -31,6 +31,7 @@ public sealed class MarketApplication : IMarketApplication
         IMarketRepository markets,
         IUserPositionRepository positions,
         IMarketActionRepository actions,
+        MarketActionExecutor exec,
         IBlockchainGateway chain,
         IUnitOfWork uow,
         IClock clock,
@@ -44,7 +45,7 @@ public sealed class MarketApplication : IMarketApplication
         _chain = chain;
         _uow = uow;
         _clock = clock;
-        _exec = new MarketActionExecutor(actions, uow, clock);
+        _exec = exec;
         _cfg = cfg;
         _quotes = quotes;
     }
@@ -296,6 +297,7 @@ public sealed class MarketApplication : IMarketApplication
                 await _positions.UpsertAfterTradeAsync(
                     userId: cmd.UserId,
                     marketId: market.Id,
+                    ownerPubkey: _chain.AuthorityPubKey,
                     positionPubKey: snap.PositionPubkey,
                     yesShares: snap.YesShares,
                     noShares: snap.NoShares,
@@ -360,6 +362,7 @@ public sealed class MarketApplication : IMarketApplication
                 await _positions.UpsertAfterTradeAsync(
                     userId: cmd.UserId,
                     marketId: market.Id,
+                    ownerPubkey: _chain.AuthorityPubKey,
                     positionPubKey: snap.PositionPubkey,
                     yesShares: snap.YesShares,
                     noShares: snap.NoShares,
