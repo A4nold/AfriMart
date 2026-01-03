@@ -3,32 +3,66 @@ using Microsoft.AspNetCore.Mvc;
 using PortfolioService.Domain.Interface;
 using PortfolioService.Domain.Models;
 using System.Security.Claims;
+using PortfolioService.Application.Interface;
 
 namespace PortfolioService.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class PortfolioController : ControllerBase
 {
-    private readonly IPortfolioService _portfolioService;
+    private readonly IPortfolioService _app;
 
-    public PortfolioController(IPortfolioService portfolioService)
+    public PortfolioController(IPortfolioService app)
     {
-        _portfolioService = portfolioService;
+        _app = app;
     }
 
-    [HttpGet("myportfolio")]
-    [Authorize]
-    public async Task<ActionResult<PortfolioOverviewDto>> GetMyPortfolio(CancellationToken ct)
+    [HttpGet]
+    public async Task<ActionResult<IReadOnlyList<UserMarketPositionDto>>> GetAll(CancellationToken ct)
     {
-        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier)
-                       ?? User.FindFirstValue("sub");
+        var userIdStr = GetUserId();
+        var res =  await _app.GetAllAsync(userIdStr, ct);
+        return Ok(res);
+    }
 
-        if (!Guid.TryParse(userIdStr, out var userId))
-            return Unauthorized();
+    [HttpGet("open")]
+    public async Task<ActionResult<IReadOnlyList<UserMarketPositionDto>>> GetOpenAsync(Guid userId,
+        CancellationToken ct)
+    {
+        var userIdStr = GetUserId();
+        var res = await _app.GetOpenAsync(userIdStr, ct);
+        return Ok(res);
+    }
 
-        var overview = await _portfolioService.GetUserPortfolioAsync(userId, ct);
-        return Ok(overview);
+    [HttpGet("resolved")]
+    public async Task<ActionResult<IReadOnlyList<UserMarketPositionDto>>> GetResolvedAsync(Guid userId,
+        CancellationToken ct)
+    {
+        var userIdStr = GetUserId();
+        var res = await _app.GetResolvedAsync(userIdStr, ct);
+        return Ok(res);
+    }
+
+    [HttpGet("{marketId:guid}")]
+    public async Task<ActionResult<UserMarketPositionDto>> GetByMarketIdAsync(Guid marketId, CancellationToken ct)
+    {
+        var userIdStr = GetUserId();
+        var res = await _app.GetByMarketIdAsync(userIdStr, marketId, ct);
+        if (res is null) return NotFound();
+        return Ok(res);
+    }
+
+    private Guid GetUserId()
+    {
+        var rawUserId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+                        ?? User.FindFirstValue("sub");
+
+        if (string.IsNullOrWhiteSpace(rawUserId) || !Guid.TryParse(rawUserId, out var userId))
+            throw new UnauthorizedAccessException("Missing/Invalid user id claim");
+        
+        return userId;
     }
 }
 

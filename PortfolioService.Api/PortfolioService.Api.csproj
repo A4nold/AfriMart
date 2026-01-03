@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\PortfolioService.Application\PortfolioService.Application.csproj" />
     <ProjectReference Include="..\PortfolioService.Domain\PortfolioService.Domain.csproj" />
     <ProjectReference Include="..\PortfolioService.Infrastructure\PortfolioService.Infrastructure.csproj" />
   </ItemGroup>
