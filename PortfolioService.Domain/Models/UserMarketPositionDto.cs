@@ -24,3 +24,20 @@ public sealed record UserMarketPositionDto(
     DateTime? LastSyncedAtUtc,
     ulong? LastSyncedSlot
     );
+    
+    public sealed record PositionRow(
+        Guid MarketId,
+        string MarketPubkey,
+        string Question,
+        DateTime EndTimeUtc,
+        
+        ulong YesShares,
+        ulong NoShares,
+        bool Claimed,
+        
+        MarketStatus? Status,
+        byte? WinningOutcomeIndex,
+        
+        DateTime? LastSyncedAtUtc,
+        ulong? LastSyncedSlot
+        );

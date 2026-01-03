@@ -1,4 +1,5 @@
-﻿using System.Security.Cryptography;
+﻿using System.Security.Claims;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MarketService.Application.Commands;
@@ -38,6 +39,17 @@ public class MarketsController : ControllerBase
     {
         if (before == 0) return 0m;
         return (after - before) / before * 100m;
+    }
+    
+    private Guid GetUserId()
+    {
+        var rawUserId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+                        ?? User.FindFirstValue("sub");
+
+        if (string.IsNullOrWhiteSpace(rawUserId) || !Guid.TryParse(rawUserId, out var userId))
+            throw new UnauthorizedAccessException("Missing/Invalid user id claim");
+        
+        return userId;
     }
 
     public MarketsController(IMarketApplication app, IWebHostEnvironment env,
@@ -83,7 +95,7 @@ public class MarketsController : ControllerBase
         try
         {
             var cmd = new CreateMarketCommand(
-                CreatorUserId: req.CreatorUserId,
+                CreatorUserId: GetUserId(),
                 MarketSeedId: GetMarketU64Seeds(),
                 Question: req.Question,
                 EndTimeUtc: req.EndTime.ToUniversalTime(),
@@ -105,7 +117,7 @@ public class MarketsController : ControllerBase
         try
         {
             var cmd = new ResolveMarketCommand(
-                ResolverUserId: req.ResolverUserId,
+                ResolverUserId: GetUserId(),
                 MarketPubKey: marketPubkey,
                 WinningOutcomeIndex: req.WinningOutcomeIndex,
                 IdempotencyKey: GetIdempotencyKeyOrThrow()
@@ -125,7 +137,7 @@ public class MarketsController : ControllerBase
         try
         {
             var cmd = new BuySharesCommand(
-                UserId: req.UserId,
+                UserId: GetUserId(),
                 MarketPubKey: marketPubkey,
                 MaxCollateralIn: req.MaxCollateralIn,
                 //MinSharesOut: req.MinSharesOut,
@@ -147,7 +159,7 @@ public class MarketsController : ControllerBase
         try
         {
             var cmd = new SellSharesCommand(
-                UserId: req.UserId,
+                UserId: GetUserId(),
                 MarketPubKey: marketPubkey,
                 SharesIn: req.SharesIn,
                 //MinCollateralOut: req.MinCollateralOut,
@@ -164,12 +176,12 @@ public class MarketsController : ControllerBase
     // ---- Claim ----
     [Authorize]
     [HttpPost("{marketPubkey}/claim")]
-    public async Task<IActionResult> Claim([FromRoute] string marketPubkey, [FromBody] ClaimWinningsApiRequest req, CancellationToken ct)
+    public async Task<IActionResult> Claim([FromRoute] string marketPubkey, CancellationToken ct)
     {
         try
         {
             var cmd = new ClaimWinningsCommand(
-                UserId: req.UserId,
+                UserId: GetUserId(),
                 MarketPubKey: marketPubkey,
                 IdempotencyKey: GetIdempotencyKeyOrThrow()
             );
@@ -318,14 +330,12 @@ public class MarketsController : ControllerBase
 // API request DTOs
 // -------------------------------
 public sealed record CreateMarketApiRequest(
-    Guid CreatorUserId,
-    ulong MarketId,
     string Question,
     DateTime EndTime,
     ulong InitialLiquidity
 );
 
-public sealed record ResolveMarketApiRequest(Guid ResolverUserId, byte WinningOutcomeIndex);
+public sealed record ResolveMarketApiRequest(byte WinningOutcomeIndex);
 
 //public sealed record BuySharesApiRequest(Guid UserId, ulong MaxCollateralIn, ulong MinSharesOut, byte OutcomeIndex);
 

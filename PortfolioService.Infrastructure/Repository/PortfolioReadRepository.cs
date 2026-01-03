@@ -1,4 +1,5 @@
-﻿using MarketService.Domain.Entities;
+﻿using System.Linq.Expressions;
+using MarketService.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using PortfolioService.Domain.Interface;
@@ -20,62 +21,89 @@ public class PortfolioReadRepository : IPortfolioReadRepository
     }
 
     public Task<List<UserMarketPositionDto>> GetAllAsync(Guid userId, CancellationToken ct)
-        => BaseQuery(userId).ToListAsync(ct);
+        => BaseEntityQuery(userId).OrderByDescending(p => p.Market.EndTimeUtc)
+            .Select(MapExpr).ToListAsync(ct);
 
 
     public Task<List<UserMarketPositionDto>> GetOpenAsync(Guid userId, CancellationToken ct)
-        => BaseQuery(userId)
-            .Where(x => x.Status == MarketStatus.Open && x.HasExposure)
-            .OrderByDescending(x => x.EndTimeUtc)
-            .ToListAsync(ct);
+        => BaseEntityQuery(userId)
+            .Where(p => p.Market.Status == MarketService.Domain.Entities.MarketStatus.Open)
+            .Where(p => p.YesShares > 0 || p.NoShares > 0)
+            .OrderByDescending(p => p.Market.EndTimeUtc)
+            .Select(MapExpr).ToListAsync(ct);
 
     public Task<List<UserMarketPositionDto>> GetResolvedAsync(Guid userId, CancellationToken ct)
-        => BaseQuery(userId)
-            .Where(x => x.Status == MarketStatus.Resolved)
-            .OrderByDescending(x => x.EndTimeUtc)
-            .ToListAsync(ct);
+        => BaseEntityQuery(userId)
+            .Where(p => p.Market.Status == MarketService.Domain.Entities.MarketStatus.Resolved)
+            .Where(p => p.YesShares > 0 || p.NoShares > 0)
+            .OrderByDescending(p => p.Market.EndTimeUtc)
+            .Select(MapExpr).ToListAsync(ct);
 
     public Task<UserMarketPositionDto?> GetByMarketIdAsync(Guid userId, Guid marketId,
         CancellationToken ct)
-        => BaseQuery(userId)
-            .Where(x => x.MarketId == marketId)
+        => BaseEntityQuery(userId)
+            .Where(p => p.MarketId == marketId)
+            .Select(MapExpr)
             .SingleOrDefaultAsync(ct);
-    
-    private IQueryable<UserMarketPositionDto> BaseQuery(Guid userId)
+
+    private IQueryable<PositionRow> BaseRows(Guid userId)
     {
         return _db.UserMarketPositions
             .AsNoTracking()
             .Where(p => p.UserId == userId)
-            .Select(p => new
-            {
-                Pos = p,
-                Market = p.Market,
-            })
-            .OrderByDescending(x => x.Market.EndTimeUtc)
-            .Select(x => new UserMarketPositionDto(
-                x.Pos.MarketId,
-                x.Market.MarketPubKey,
-                x.Market.Question,
-                x.Market.EndTimeUtc,
-                x.Pos.YesShares,
-                x.Pos.NoShares,
-                x.Pos.Claimed,
-                (PortfolioService.Domain.Models.MarketStatus?)x.Market.Status,
-                x.Market.WinningOutcomeIndex,
-                (x.Pos.YesShares > 0 || x.Pos.NoShares > 0),
-                (x.Pos.YesShares > 0 && x.Pos.NoShares > 0) ? ExposureSide.Mixed :
-                (x.Pos.YesShares > 0) ? ExposureSide.Yes : (x.Pos.NoShares > 0) ? ExposureSide.No : ExposureSide.None,
-                x.Market.Status == MarketService.Domain.Entities.MarketStatus.Resolved,
-                (PortfolioService.Domain.Models.MarketStatus?)x.Market.Status == MarketStatus.Resolved &&
-                (
-                    (x.Market.WinningOutcomeIndex == 0 && x.Pos.YesShares > 0) ||
-                    (x.Market.WinningOutcomeIndex == 1 && x.Pos.NoShares > 0)
-                ),
-                x.Market.Status == MarketService.Domain.Entities.MarketStatus.Resolved &&
-                !x.Pos.Claimed && ((x.Market.WinningOutcomeIndex == 0 && x.Pos.YesShares > 0) ||
-                               (x.Market.WinningOutcomeIndex == 1 && x.Pos.NoShares > 0)),
-                x.Pos.LastSyncedAtUtc,
-                x.Pos.LastSyncedSlot
+            .OrderByDescending(p => p.Market.EndTimeUtc)
+            .Select(p => new PositionRow(
+                p.MarketId,
+                p.Market.MarketPubKey,
+                p.Market.Question,
+                p.Market.EndTimeUtc,
+                p.YesShares,
+                p.NoShares,
+                p.Claimed,
+                (PortfolioService.Domain.Models.MarketStatus?)p.Market.Status,
+                p.Market.WinningOutcomeIndex,
+                p.LastSyncedAtUtc,
+                p.LastSyncedSlot
             ));
     }
+
+    private IQueryable<UserMarketPosition> BaseEntityQuery(Guid userId)
+    {
+        return _db.UserMarketPositions
+            .AsNoTracking()
+            .Where(p => p.UserId == userId);
+    }
+
+    private static readonly Expression<Func<UserMarketPosition, UserMarketPositionDto>> MapExpr =
+        p => new UserMarketPositionDto(
+            p.MarketId,
+            p.Market.MarketPubKey,
+            p.Market.Question,
+            p.Market.EndTimeUtc,
+            p.YesShares,
+            p.NoShares,
+            p.Claimed,
+
+            (MarketStatus?)p.Market.Status,
+            p.Market.WinningOutcomeIndex,
+            (p.YesShares > 0UL || p.NoShares > 0UL),
+            (p.YesShares > 0UL && p.NoShares > 0UL) ? ExposureSide.Mixed
+            : (p.YesShares > 0UL) ? ExposureSide.Yes
+            : (p.NoShares > 0UL) ? ExposureSide.No : ExposureSide.None,
+            ((MarketStatus?)p.Market.Status) == MarketStatus.Resolved,
+            ((MarketStatus?)p.Market.Status) == MarketStatus.Resolved
+            && p.Market.WinningOutcomeIndex != null
+            && (
+                (p.Market.WinningOutcomeIndex == (byte)0 && p.YesShares > 0UL) ||
+                (p.Market.WinningOutcomeIndex == (byte)1 && p.NoShares > 0UL)
+            ),
+            ((MarketStatus?)p.Market.Status) == MarketStatus.Resolved
+            && !p.Claimed
+            && p.Market.WinningOutcomeIndex != null
+            && (
+                (p.Market.WinningOutcomeIndex == (byte)0 && p.YesShares > 0UL) ||
+                (p.Market.WinningOutcomeIndex == (byte)1 && p.NoShares > 0UL)),
+            p.LastSyncedAtUtc,
+            p.LastSyncedSlot
+        );
 }
