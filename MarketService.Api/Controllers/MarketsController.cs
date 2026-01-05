@@ -317,32 +317,6 @@ public class MarketsController : ControllerBase
             _ => StatusCode(500, new ProblemDetails { Title = "Server error", Detail = ex.Message, Status = 500 })
         };
     }
-    
-    private ActionResult MapExceptions(Exception ex)
-    {
-        return ex switch
-        {
-            ValidationException ve => BadRequest(new ProblemDetails { Title = "Validation error", Detail = ve.Message, Status = 400 }),
-            NotFoundException nfe => NotFound(new ProblemDetails { Title = "Not found", Detail = nfe.Message, Status = 404 }),
-            ConflictException ce => Conflict(new ProblemDetails { Title = "Conflict", Detail = ce.Message, Status = 409 }),
-
-            AnchorProgramException ape => BadRequest(new ProblemDetails
-            {
-                Title = "On-chain program error",
-                Detail = ape.Message,
-                Status = 400,
-                Extensions =
-                {
-                    ["anchorCode"] = ape.AnchorCode,
-                    ["anchorNumber"] = ape.AnchorNumber
-                }
-            }),
-
-            ExternalDependencyException ede => StatusCode(503, new ProblemDetails { Title = "Blockchain dependency failed", Detail = ede.Message, Status = 503 }),
-
-            _ => StatusCode(500, new ProblemDetails { Title = "Server error", Detail = ex.Message, Status = 500 })
-        };
-    }
 }
 
 // -------------------------------

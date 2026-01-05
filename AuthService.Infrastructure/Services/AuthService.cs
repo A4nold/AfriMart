@@ -19,6 +19,7 @@ namespace AuthService.Infrastructure.Services
     {
         private readonly AuthDbContext _db;
         private readonly JwtSettings _jwt;
+        // private readonly IClock  _clock;
 
         public AuthService(AuthDbContext db, IOptions<JwtSettings> jwtOptions)
         {

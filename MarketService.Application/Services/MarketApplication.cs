@@ -450,7 +450,7 @@ public sealed class MarketApplication : IMarketApplication
 
         await _uow.SaveChangesAsync(ct);
 
-        return new SyncPositionResult(market.Id, market.MarketPubKey,
+        return new SyncPositionResult( market.MarketPubKey, snap.OwnerPubkey,
             snap.PositionPubkey, snap.YesShares, snap.NoShares, snap.Claimed, snap.LastSyncedSlot, _clock.UtcNow);
     }
 

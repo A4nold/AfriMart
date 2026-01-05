@@ -1,8 +1,8 @@
 namespace MarketService.Application.Responses;
 
 public sealed record SyncPositionResult(
-    Guid MarketId,
     string MarketPubkey,
+    string OwnerPubkey,
     string PositionPubkey,
     ulong YesShares,
     ulong NoShares,
