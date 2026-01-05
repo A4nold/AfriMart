@@ -228,14 +228,14 @@ public class MarketsController : ControllerBase
         }
         catch (Exception ex)
         {
-            return MapExceptions(ex);
+            return MapException(ex);
         }
     } 
     
     // ---- Quote Sell ----
     [Authorize]
     [HttpPost("{marketPubkey}/quote/sell")]
-    public async Task<ActionResult<SellQuote>> QuoteSell(
+    public async Task<IActionResult> QuoteSell(
         [FromRoute] string marketPubkey,
         [FromBody] SellQuoteRequest req,
         CancellationToken ct)
@@ -266,7 +266,26 @@ public class MarketsController : ControllerBase
         }
         catch (Exception ex)
         {
-            return MapExceptions(ex);
+            return MapException(ex);
+        }
+    }
+    
+    //----Sync position----
+    [Authorize]
+    [HttpPost("{marketPubkey}/sync-position")]
+    public async Task<IActionResult> SyncPosition([FromRoute] string marketPubkey, CancellationToken ct)
+    {
+        try
+        {
+            var userId = GetUserId();
+            
+            var result = await _app.SyncPositionAsync(new SyncPositionCommand(userId, marketPubkey), ct);
+            
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            return MapException(ex);
         }
     }
 
@@ -336,9 +355,4 @@ public sealed record CreateMarketApiRequest(
 );
 
 public sealed record ResolveMarketApiRequest(byte WinningOutcomeIndex);
-
-//public sealed record BuySharesApiRequest(Guid UserId, ulong MaxCollateralIn, ulong MinSharesOut, byte OutcomeIndex);
-
-//public sealed record SellSharesApiRequest(Guid UserId, ulong SharesIn, ulong MinCollateralOut, byte OutcomeIndex);
-
 public sealed record ClaimWinningsApiRequest(Guid UserId);

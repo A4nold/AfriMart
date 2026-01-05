@@ -4,6 +4,7 @@ using MarketService.Application.Exception;
 using MarketService.Application.Helper;
 using MarketService.Application.Interfaces;
 using MarketService.Application.Requests;
+using MarketService.Application.Responses;
 using MarketService.Domain.Entities;
 using MarketService.Domain.Interface;
 using MarketService.Domain.Models;
@@ -431,6 +432,26 @@ public sealed class MarketApplication : IMarketApplication
                 }
             }, 
             ct);
+    }
+
+    public async Task<SyncPositionResult> SyncPositionAsync(SyncPositionCommand cmd, CancellationToken ct)
+    {
+        var market = await _markets.GetByPubKeyAsync(cmd.MarketPubkey, ct)
+            ?? throw new NotFoundException("Market not found.");
+        
+        //For now: MVP user == authority wallet in blockchain service
+        //Later: pass user's public key once.
+        var snap = await _chain.GetPositionAsync(marketPubkey: market.MarketPubKey, 
+            _chain.AuthorityPubKey, ct);
+
+        await _positions.UpsertAfterTradeAsync(cmd.UserId, market.Id,
+            _chain.AuthorityPubKey, snap.PositionPubkey,
+            snap.YesShares, snap.NoShares, snap.Claimed, snap.LastSyncedSlot, ct);
+
+        await _uow.SaveChangesAsync(ct);
+
+        return new SyncPositionResult(market.Id, market.MarketPubKey,
+            snap.PositionPubkey, snap.YesShares, snap.NoShares, snap.Claimed, snap.LastSyncedSlot, _clock.UtcNow);
     }
 
 }

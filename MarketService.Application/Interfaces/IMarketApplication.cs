@@ -1,4 +1,5 @@
 using MarketService.Application.Commands;
+using MarketService.Application.Responses;
 
 namespace MarketService.Application.Interfaces;
 
@@ -9,4 +10,5 @@ public interface IMarketApplication
     Task<BuySharesResult> BuySharesAsync(BuySharesCommand cmd, CancellationToken ct);
     Task<SellSharesResult> SellSharesAsync(SellSharesCommand cmd, CancellationToken ct);
     Task<ClaimWinningsResult> ClaimWinningsAsync(ClaimWinningsCommand cmd, CancellationToken ct);
+    Task<SyncPositionResult> SyncPositionAsync(SyncPositionCommand cmd, CancellationToken ct);
 }
