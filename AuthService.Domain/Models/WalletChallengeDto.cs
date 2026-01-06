@@ -2,6 +2,14 @@ namespace AuthService.Domain.Models;
 
 public sealed record WalletChallengeRequest(string WalletPubkey);
 
+public sealed record WalletChallengeDto(
+    Guid ChallengeId,
+    string WalletPubkey,
+    string Nonce,
+    string MessageToSign,
+    DateTime ExpiresAtUtc
+);
+
 public sealed record WalletChallengeResponse(
     Guid ChallengeId,
     string WalletPubkey,

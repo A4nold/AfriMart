@@ -2,7 +2,7 @@ using System.Text;
 using Chaos.NaCl;
 using SimpleBase;
 
-namespace AuthService.Api.Helper;
+namespace AuthService.Infrastructure.Security;
 
 public static class SolanaSignInVerifier
 {

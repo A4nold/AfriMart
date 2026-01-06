@@ -3,8 +3,8 @@
 public class LoginResponse
 {
     public Guid UserId { get; set; }
-    public string Email { get; set; } = default!;
-    public string Alias { get; set; } = default!;
+    public string? Email { get; set; }
+    public string? Alias { get; set; } 
     public IList<string> Roles { get; set; } = new List<string>();
 
     public string AccessToken { get; set; } = default!;

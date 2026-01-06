@@ -11,6 +11,7 @@ namespace AuthService.Infrastructure.Data
         public DbSet<Role> Roles => Set<Role>();
         public DbSet<UserRole> UserRoles => Set<UserRole>();
         public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+        public DbSet<WalletLoginChallenge> WalletLoginChallenges => Set<WalletLoginChallenge>();
 
         protected override void OnModelCreating(ModelBuilder builder)
         {

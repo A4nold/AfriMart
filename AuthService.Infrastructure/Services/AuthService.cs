@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using AuthService.Domain.Entities;
 using AuthService.Domain.Interfaces;
+using AuthService.Domain.Models;
 using AuthService.Domain.Models.Config;
 using AuthService.Domain.Models.Requests;
 using AuthService.Domain.Models.Responses;
@@ -120,6 +121,9 @@ namespace AuthService.Infrastructure.Services
 
             if (user is null || !user.IsActive)
                 throw new UnauthorizedAccessException("Invalid credentials.");
+            
+            if (user.Email == null || user.PasswordHash == null)
+                throw new UnauthorizedAccessException("Invalid credentials.");
 
             // 2. Verify password
             var validPassword = PasswordHasher.VerifyPassword(request.Password, user.PasswordHash);
@@ -200,7 +204,7 @@ namespace AuthService.Infrastructure.Services
             {
                 new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
                 new(JwtRegisteredClaimNames.Email, user.Email),
-                new("alias", user.Alias),
+                new("alias", user.WalletPubkey),
                 new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
             };
 
@@ -232,6 +236,149 @@ namespace AuthService.Infrastructure.Services
                 Roles = roles,
                 AccessToken = accessToken,
                 RefreshToken = newRefresh.Token,
+                ExpiresAt = expires
+            };
+        }
+
+        public async Task<WalletChallengeDto> CreateChallengeAsync(string walletPubkey, CancellationToken ct)
+        {
+            //throw new NotImplementedException();
+            //ensure user exists(create one if no user is found)
+            var user = await _db.Users.SingleOrDefaultAsync(x => x.WalletPubkey == walletPubkey, ct);
+            if (user is null)
+            {
+                user = new User
+                {
+                    Id = Guid.NewGuid(),
+                    WalletPubkey = walletPubkey,
+                    CreatedAt = DateTime.UtcNow,
+                };
+                _db.Users.Add(user);
+            }
+
+            var nonce = Guid.NewGuid().ToString("N");
+            
+            //Create challenge
+            var challenge = new WalletLoginChallenge
+            {
+                Id = Guid.NewGuid(),
+                WalletPubkey = walletPubkey,
+                Nonce = nonce,
+                Message =
+                    $"Sign in to AfriMart\nWallet:{walletPubkey}\nNonce: {Guid.NewGuid():N}\nAt:{DateTime.UtcNow:0}",
+                ExpiresAtUtc = DateTime.UtcNow.AddMinutes(5),
+                UsedAtUtc = null,
+                CreatedAtUtc = DateTime.UtcNow,
+            };
+            _db.WalletLoginChallenges.Add(challenge);
+            await _db.SaveChangesAsync(ct);
+            
+            return new WalletChallengeDto(
+                challenge.Id,
+                challenge.WalletPubkey,
+                challenge.Nonce,
+                challenge.Message,
+                challenge.ExpiresAtUtc
+                );
+        }
+
+        public async Task<LoginResponse> VerifyChallengeAsync(string walletPubkey, string signatureBase64, string challengeId, CancellationToken ct)
+        {
+            var id = Guid.Parse(challengeId);
+            
+            var challenge= _db.WalletLoginChallenges.SingleOrDefaultAsync(
+                x => x.Id == id && x.WalletPubkey == walletPubkey, ct);
+            
+            if (challenge is null) throw new UnauthorizedAccessException("Challenge not found");
+            if (challenge.Result?.UsedAtUtc != null) throw new UnauthorizedAccessException("Challenge already used");
+            if (challenge.Result?.ExpiresAtUtc <= DateTime.UtcNow)
+                throw new UnauthorizedAccessException("Challenge is Expired");
+            
+            //Verify ed25519 signature
+            var valid = SolanaSignInVerifier.Verify(challenge.Result?.Message, walletPubkey, signatureBase64);
+            
+            if(!valid) throw new UnauthorizedAccessException("Invalid Signature");
+            
+            challenge.Result?.UsedAtUtc = DateTime.UtcNow;
+            
+            var user = await _db.Users
+                .Include(u => u.UserRoles)
+                .ThenInclude(ur => ur.Role)
+                .SingleOrDefaultAsync(u => u.WalletPubkey == walletPubkey, ct);
+            
+            if (user.WalletPubkey == null) throw new UnauthorizedAccessException("User has no linked wallet");
+
+            if (user is null)
+            {
+                user = new User
+                {
+                    Id = Guid.NewGuid(),
+                    WalletPubkey = walletPubkey,
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                // assign default role = User
+                var userRole = await _db.Roles.SingleAsync(r => r.Name == "User", ct);
+
+                user.UserRoles = new List<UserRole>
+                {
+                    new UserRole
+                    {
+                        UserId = user.Id,
+                        RoleId = userRole.Id
+                    }
+                };
+
+                _db.Users.Add(user);
+            }
+
+            await _db.SaveChangesAsync(ct);
+
+            // Collect roles (same as LoginAsync)
+            var roles = user.UserRoles
+                .Select(ur => ur.Role.Name)
+                .ToList();
+
+            // Generate JWT (IDENTICAL to LoginAsync)
+            var now = DateTime.UtcNow;
+            var expires = now.AddMinutes(_jwt.ExpiresMinutes);
+
+            var claims = new List<Claim>
+            {
+                new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+                new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                new("wallet", walletPubkey)
+            };
+
+            foreach (var role in roles)
+            {
+                claims.Add(new Claim(ClaimTypes.Role, role));
+            }
+
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwt.Key));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var token = new JwtSecurityToken(
+                issuer: _jwt.Issuer,
+                audience: _jwt.Audience,
+                claims: claims,
+                notBefore: now,
+                expires: expires,
+                signingCredentials: creds
+            );
+
+            var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
+            var refresh = await CreateAndStoreRefreshTokenAsync(user);
+
+            return new LoginResponse
+            {
+                UserId = user.Id,
+                Email = user.Email, // may be null for wallet users (fine)
+                Alias = user.Alias, // optional
+                Roles = roles,
+                AccessToken = tokenString,
+                RefreshToken = refresh.Token,
                 ExpiresAt = expires
             };
         }

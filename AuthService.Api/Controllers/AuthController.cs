@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using AuthService.Domain.Entities;
+using AuthService.Domain.Models;
 
 namespace AuthService.Api.Controllers;
 
@@ -86,6 +88,38 @@ public class AuthController : ControllerBase
         
     }
 
+    [HttpPost("wallet/challenge")]
+    [ProducesResponseType(typeof(WalletLoginChallenge), StatusCodes.Status200OK)]
+    public async Task<ActionResult<WalletChallengeDto>> WalletLoginChallenge(
+        [FromBody] WalletChallengeRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.WalletPubkey))
+            return BadRequest("Wallet Pubkey is required");
+        
+        var dto = await _authService.CreateChallengeAsync(request.WalletPubkey, ct);
+        
+        return Ok(new WalletChallengeResponse(dto.ChallengeId,
+            dto.WalletPubkey, dto.Nonce,dto.MessageToSign, dto.ExpiresAtUtc));
+    }
+
+    [HttpPost("wallet/verify")]
+    [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<LoginResponse>> VerifyWalletChallenge(
+        [FromBody] WalletVerifyRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.WalletPubkey))
+            return BadRequest("Wallet Pubkey is required");
+        if (string.IsNullOrWhiteSpace(request.ChallengeId.ToString()))
+            return BadRequest("Challenge Id is required");
+        if (string.IsNullOrWhiteSpace(request.Signature))
+            return BadRequest("Signature is required");
+        
+        var res = await _authService.VerifyChallengeAsync(request.WalletPubkey, 
+            request.Signature, request.ChallengeId.ToString(), ct);
+        
+        return Ok(res);
+    }
+
     [HttpPost("logout")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> LogOut([FromBody] RefreshTokenRequest request)
@@ -109,4 +143,6 @@ public class AuthController : ControllerBase
         await _authService.LogoutAllAsync(userId);
         return NoContent();
     }
+    
+    
 }
